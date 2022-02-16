@@ -8,7 +8,7 @@ from data_loader import load_data
 from train import train_gcn
 from retrain import retrain, loss_difference
 from unlearn import unlearn, influences
-from utils import save_model, sample_edges
+from utils import save_model, sample_edges, find_loss_difference
 
 
 if __name__ == '__main__':
@@ -32,15 +32,16 @@ if __name__ == '__main__':
     parser.add_argument('-lr', type=float, default=0.001)
     parser.add_argument('-l2', type=float, default=1E-5)
     parser.add_argument('-emb-dim', type=int, default=32)
+    parser.add_argument('-feature', dest='feature', action='store_true')
     parser.add_argument('-p', dest='patience', type=int, default=10)
 
     # For unlearning
-    parser.add_argument('-edge-path', dest='edges', type=str, default=None)
+    parser.add_argument('-method', type=str, default='degree')
     parser.add_argument('-depth', type=int, default=1000)
     parser.add_argument('-r', type=int, default=10)
     parser.add_argument('-scale', type=int, default=1)
-    parser.add_argument('-num_edges', type=int, default=50, 
-                            help='subsample the 10% edges for speed up the experiments')
+    parser.add_argument('-edges', type=int, default=10, 
+                        help='in terms of precentage, how many edges to sample.')
     args = parser.parse_args()
 
     print('Parameters:', vars(args))
@@ -49,7 +50,7 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    data = load_data(args.data)
+    data = load_data(args)
     device = torch.device(f'cuda:{args.gpu}') if torch.cuda.is_available() and args.gpu >= 0 else torch.device('cpu')
 
     if args.train:
@@ -57,16 +58,15 @@ if __name__ == '__main__':
         torch.save(model.state_dict(), os.path.join('./checkpoint', f'gcn_{args.data}_best.pt'))
 
     if args.retrain:
-        edges_to_forget = sample_edges(args, data)
-        retrain(args, data, edges_to_forget, device)
+        # edges_to_forget = sample_edges(args, data, method=args.method)
+        retrain(args, data, data['edges'], device)
+        loss_difference(args, data, device)
 
     if args.influence:
-        if args.num_edges != -1:
-            edges_to_forget = sample_edges(args, data)[:args.num_edges]
-        else:
-            edges_to_forget = sample_edges(args, data)
+        edges_to_forget = sample_edges(args, data, method=args.method, num_edges=args.edges)
+        print('The number of edges to be forgottn is:', len(edges_to_forget))
 
-        loss_diff = loss_difference(args, data, edges_to_forget, device)
+        loss_diff = find_loss_difference(args, edges_to_forget)
         infls = influences(args, data, edges_to_forget, device)
         if args.save:
             df = pd.DataFrame({
@@ -80,15 +80,14 @@ if __name__ == '__main__':
             print(f'Edge {e}, influence: {infls[e]:.4f}, loss_diff: {loss_diff[e]:.4f}.')
 
     if args.unlearn:
-        if args.num_edges != -1:
-            edges_to_forget = sample_edges(args, data)[:args.num_edges]
-        else:
-            edges_to_forget = sample_edges(args, data)
+        edges_to_forget = sample_edges(args, data, method=args.method, num_edges=args.edges)
+        print('The number of edges to be forgottn is:', len(edges_to_forget))
+        
+        model_retrained = retrain(args, data, edges_to_forget, device, forget_all=True)
+        save_model(args, model_retrained, type='retrain')
 
         model_unlearned = unlearn(args, data, edges_to_forget, device)
         save_model(args, model_unlearned, type='unlearn')
-        model_retrained = retrain(args, data, edges_to_forget, device, forget_all=True)
-        save_model(args, model_retrained, type='retrain')
 
 
         

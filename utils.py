@@ -1,8 +1,10 @@
+import imp
 import os
 import pickle
 import torch
 import random
-
+from collections import defaultdict
+from tqdm import tqdm
 from model import GCN
 
 
@@ -19,13 +21,16 @@ def load_model(args, data, type='original', edge=None):
         embedding_size = args.emb_dim if data['features'] is None else data['features'].shape[1]
         model = GCN(data['num_nodes'], embedding_size,
                     args.hidden, data['num_classes'], data['features'])
-        model.load_state_dict(torch.load(os.path.join('./checkpoint', f'gcn_{args.data}_{edge[0]}_{edge[1]}_best.pt')))
+        model.load_state_dict(torch.load(os.path.join('./checkpoint', 'all',
+                              f'gcn_{args.data}_{edge[0]}_{edge[1]}_best.pt')))
         return model
     else:
         embedding_size = args.emb_dim if data['features'] is None else data['features'].shape[1]
         model = GCN(data['num_nodes'], embedding_size,
                     args.hidden, data['num_classes'], data['features'])
-        model.load_state_dict(torch.load(os.path.join('./checkpoint', f'gcn_{args.data}_{type}_best.pt')))
+        model.load_state_dict(torch.load(os.path.join(
+            './checkpoint', f'gcn_{args.data}_{type}_{args.method}{args.edges}_best.pt')))
+        return model
 
 
 def save_model(args, model, type='original', edge=None):
@@ -34,30 +39,39 @@ def save_model(args, model, type='original', edge=None):
     if type == 'original':
         torch.save(model.state_dict(), os.path.join('./checkpoint', f'gcn_{args.data}_best.pt'))
     elif type == 'edge':
-        torch.save(model.state_dict(), os.path.join('./checkpoint', f'gcn_{args.data}_{edge[0]}_{edge[1]}_best.pt'))
+        torch.save(model.state_dict(), os.path.join('./checkpoint', f'gcn_all_{args.data}_{edge[0]}_{edge[1]}_best.pt'))
     else:
-        torch.save(model.state_dict(), os.path.join('./checkpoint', f'gcn_{args.data}_{type}_best.pt'))
+        torch.save(model.state_dict(), os.path.join('./checkpoint',
+                   f'gcn_{args.data}_{type}_{args.method}{args.edges}_best.pt'))
 
 
-def sample_edges(args, data, method='random'):
-    edges_path = os.path.join('./data', args.data, 'edges_to_forget_{method}.list')
-    if os.path.exists(edges_path):
-        with open(edges_path, 'rb') as fp:
-            edges_to_forget = pickle.load(fp)
-        return edges_to_forget
+def sample_edges(args, data, method='random', num_edges=10):
+    # edges_path = os.path.join('./data', args.data, f'edges_to_forget_{method}.list')
+    # if os.path.exists(edges_path):
+    #     with open(edges_path, 'rb') as fp:
+    #         edges_to_forget = pickle.load(fp)
+    #     return edges_to_forget
 
+    n = int(num_edges * 0.01 * len(data['edges']))
     if method == 'random':
-        num_edges = int(args.num_edges * 0.01 * len(data['edges']))
-        edges_to_forget = random.sample(data['edges'], num_edges)
+        edges_to_forget = random.sample(data['edges'], n)
     elif method == 'degree':
-        raise NotImplementedError(f'{method} did not implement yet.')
+        node_degree = defaultdict(int)
+        for edge in data['edges']:
+            node_degree[edge[0]] += 1
+            node_degree[edge[1]] += 1
+        edge_degree = {(e[0], e[1]): node_degree[e[0]] + node_degree[e[1]] for e in data['edges']}
+        sorted_edge_degree = {k: v for k, v in sorted(edge_degree.items(), key=lambda item: item[1], reverse=False)}
+        edges_to_forget = list(sorted_edge_degree.keys())[:n]
     elif method == 'loss_diff':
-        raise NotImplementedError(f'{method} did not implement yet.')
+        edge2loss_diff = find_loss_difference(args, data['edges'])
+        sorted_edge2loss_diff = {k: v for k, v in sorted(edge2loss_diff.items(), key=lambda x: abs(x[1]), reverse=True)}
+        edges_to_forget = list(sorted_edge2loss_diff.keys())[:n]
     else:
         raise ValueError(f'Invalid sample method: {method}.')
 
-    with open(edges_path, 'wb') as fp:
-        pickle.dump(edges_to_forget, fp)
+    # with open(edges_path, 'wb') as fp:
+    #     pickle.dump(edges_to_forget, fp)
 
     return edges_to_forget
 
@@ -88,3 +102,15 @@ def loss_of_test_nodes(args, data, device=torch.device('cpu')):
         })
 
     return sorted(test_node_loss, key=lambda x: x['loss'], reverse=True)
+
+
+def find_loss_difference(args, edges_to_forget):
+    loss_diff_path = os.path.join('./data', args.data, 'edge_loss_difference.dict')
+    if not os.path.exists(loss_diff_path):
+        raise FileExistsError('Could not find loss difference results. Please use -loss-diff to generate it first.')
+
+    with open(loss_diff_path, 'rb') as fp:
+        edge2loss_diff = pickle.load(fp)
+
+    result = {e: edge2loss_diff[e] for e in edges_to_forget}
+    return result

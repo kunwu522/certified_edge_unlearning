@@ -11,7 +11,7 @@ class GCN(nn.Module):
 
         self.embedding = nn.Embedding(num_nodes, embedding_dim=embedding_size)
         # self.embedding.weight.requires_grad = False
-        self.embedding.weight = nn.Parameter(torch.from_numpy(weights).float(), requires_grad=False)
+        self.embedding.weight = nn.Parameter(torch.from_numpy(weights).float(), requires_grad=True)
 
         self.conv1 = GCNConv(embedding_size, num_classes, bias=False)
         # self.conv2 = GCNConv(hidden_size, num_classes)

@@ -102,6 +102,7 @@ def evaluate(args, data, model, device):
 def train_gcn(args, data, eval=True, verbose=True, device=torch.device('cpu')):
     if verbose:
         print('Start to train a GCN model...')
+
     embedding_size = args.emb_dim if data['features'] is None else data['features'].shape[1]
     model = GCN(data['num_nodes'], embedding_size,
                 args.hidden, data['num_classes'], data['features']).to(device)
