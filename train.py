@@ -1,10 +1,11 @@
 import os
+import time
 import torch
 import numpy as np
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 
-from model import GCN
+from utils import create_model
 from sklearn.metrics import classification_report
 
 
@@ -67,21 +68,22 @@ def train(args, data, model, device, verbose):
             best_valid_loss = valid_loss
             trail_count = 0
             best_epoch = e
-            torch.save(model.state_dict(), os.path.join('./checkpoint', f'tmp_gcn_{args.data}_{args.gpu}_best.pt'))
+            torch.save(model.state_dict(), os.path.join('./checkpoint',
+                       'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
         else:
             trail_count += 1
             if trail_count == patience:
-                print(f'  Early Stop, the best Epoch is {best_epoch}, validation loss: {best_valid_loss:.4f}.')
+                if verbose:
+                    print(f'  Early Stop, the best Epoch is {best_epoch}, validation loss: {best_valid_loss:.4f}.')
                 break
 
 
 def evaluate(args, data, model, device):
-    test_loader = DataLoader(data['test_set'], batch_size=args.test_batch)
+    test_loader = DataLoader(data['test_set'], batch_size=args.test_batch, shuffle=False)
     edge_index = torch.tensor(data['edges'], device=device).t()
     y_preds = []
     y_true = []
 
-    print(type(model))
     model.eval()
     with torch.no_grad():
         for nodes, labels in test_loader:
@@ -94,27 +96,46 @@ def evaluate(args, data, model, device):
             y_preds.extend(y_pred.cpu().tolist())
             y_true.extend(labels.cpu().tolist())
 
-    results = classification_report(y_true, y_preds)
+    results = classification_report(y_true, y_preds, digits=4)
     print('  Result:')
     print(results)
 
 
-def train_gcn(args, data, eval=True, verbose=True, device=torch.device('cpu')):
-    if verbose:
-        print('Start to train a GCN model...')
+def test(model, test_loader, edge_index, device):
+    y_preds = []
+    y_trues = []
+    test_loss = []
+    model.eval()
+    with torch.no_grad():
+        for nodes, labels in test_loader:
+            nodes, labels = nodes.to(device), labels.to(device)
+            y_hat = model(nodes, edge_index)
+            test_loss.append(model.loss(y_hat, labels).cpu().item())
+            y_pred = torch.argmax(y_hat, dim=1)
+            y_preds.extend(y_pred.cpu().tolist())
+            y_trues.extend(labels.cpu().tolist())
+    del model
+    torch.cuda.empty_cache()
+    res_original = classification_report(y_trues, y_preds, digits=4, output_dict=True)
+    return res_original, test_loss
 
-    embedding_size = args.emb_dim if data['features'] is None else data['features'].shape[1]
-    model = GCN(data['num_nodes'], embedding_size,
-                args.hidden, data['num_classes'], data['features']).to(device)
+
+def train_model(args, data, eval=True, verbose=True, device=torch.device('cpu')):
+    if verbose:
+        t0 = time.time()
+        print(f'Start to train a {args.model} model...')
+
+    model = create_model(args, data).to(device)
     train(args, data, model, device, verbose)
-    model.load_state_dict(torch.load(os.path.join('./checkpoint', f'tmp_gcn_{args.data}_{args.gpu}_best.pt')))
+    model.load_state_dict(torch.load(os.path.join('./checkpoint', 'tmp',
+                          f'{args.model}_{args.data}_{args.gpu}_best.pt')))
 
     if eval:
         evaluate(args, data, model, device)
 
-    os.remove(os.path.join('./checkpoint', f'tmp_gcn_{args.data}_{args.gpu}_best.pt'))
+    os.remove(os.path.join('./checkpoint', 'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
 
     if verbose:
-        print('GCN model training finished.')
+        print(f'{args.model} model training finished. Duration:', int(time.time() - t0))
 
     return model
