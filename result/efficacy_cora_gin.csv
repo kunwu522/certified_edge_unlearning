@@ -1,0 +1,3 @@
+,data,model,setting,linkteller
+0,cora,gin,retrain,0.0
+1,cora,gin,unlearn,0.0

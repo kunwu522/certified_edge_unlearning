@@ -2,6 +2,7 @@ from copyreg import pickle
 import os
 import pickle
 from collections import defaultdict
+import random
 import numpy as np
 import torch
 import torch.nn as nn
@@ -51,7 +52,10 @@ def load_cora(args):
     with open(os.path.join('./data', args.data, 'cora.cites'), 'r') as fp:
         for line in fp:
             e = line.split()
-            edges.append((node2idx[e[0]], node2idx[e[1]]))
+            if (node2idx[e[0]], node2idx[e[1]]) not in edges:
+                edges.append((node2idx[e[0]], node2idx[e[1]]))
+            if (node2idx[e[1]], node2idx[e[0]]) not in edges:
+                edges.append((node2idx[e[1]], node2idx[e[0]]))
 
     if not args.feature:
         features = initialize_features(args.data, num_nodes, args.emb_dim)
@@ -84,6 +88,13 @@ def load_physics(args):
     return nodes, edges, features, labels
 
 
+def _check_undirected(edges):
+    for v1, v2 in random.sample(edges, int(len(edges) * 0.1)):
+        if (v2, v1) not in edges:
+            return False
+    return True
+
+
 def load_citeseer(args):
     dataset = Planetoid(root='./data/citeseer', name='Citeseer')
     data = dataset[0]
@@ -93,6 +104,8 @@ def load_citeseer(args):
     nodes = list(range(len(data.x)))
     labels = data.y.tolist()
     edges = [(e[0], e[1]) for e in data.edge_index.t().tolist()]
+
+    assert _check_undirected(edges), 'CiteSeer is not undirected graph.'
 
     return nodes, edges, features, labels
 
@@ -105,7 +118,17 @@ def load_polblogs(args):
 
     nodes = list(range(data.num_nodes))
     labels = data.y.tolist()
-    edges = [(e[0], e[1]) for e in data.edge_index.t().tolist()]
+    edges = []
+    for v1, v2 in data.edge_index.t().tolist():
+        if v1 == v2:
+            continue
+
+        if (v1, v2) not in edges:
+            edges.append((v1, v2))
+        if (v2, v1) not in edges:
+            edges.append((v2, v1))
+
+    assert _check_undirected(edges), 'PolBlogs is not undirected graph.'
 
     return nodes, edges, features, labels
 

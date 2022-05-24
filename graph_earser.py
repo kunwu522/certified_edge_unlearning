@@ -20,6 +20,7 @@ from model import GNN
 
 from train import train_model
 from data_loader import CoraDataset
+from utils import remove_undirected_edges
 
 
 def _blpa(nodes, adj_list, k, delta, T):
@@ -153,7 +154,6 @@ def _mean_aggr(data, shard_models, shard_edges, device):
             y_hat = model(nodes, edge_index)
             all_y_hat.append(y_hat.unsqueeze(1))
         mean_y_hat = torch.mean(torch.cat(all_y_hat, dim=1), dim=1)
-        print('mean_y_hat:', mean_y_hat.size())
         y_pred = torch.argmax(mean_y_hat, dim=1)
         y_preds.extend(y_pred.cpu().tolist())
         y_true.extend(labels.cpu().tolist())
@@ -162,25 +162,29 @@ def _mean_aggr(data, shard_models, shard_edges, device):
     return result['accuracy'], result['macro avg']['precision'], result['macro avg']['recall'], result['macro avg']['f1-score']
 
 
-def train(args, data, device):
+def train(args, data, device, path='./baseline'):
 
-    shards_path = os.path.join('./baseline', args.baseline, f'{args.data}_shards_{args.partition}.list')
-    if os.path.exists(shards_path):
-        with open(shards_path, 'rb') as fp:
-            shards = pickle.load(fp)
-    else:
-        nodes = data['nodes']
-        edges = data['edges']
-        if args.partition == 'blpa':
-            adj_list = defaultdict(set)
-            for v1, v2 in edges:
-                adj_list[v1].add(v2)
-                adj_list[v2].add(v1)
-            shards = _blpa(nodes, adj_list, args.num_shards, 100, args.max_t)
-        elif args.partition == 'bekm':
-            shards = _bekm(args, data, args.num_shards, 100, args.max_t)
-        with open(shards_path, 'wb') as fp:
-            pickle.dump(shards, fp)
+    # shards_path = os.path.join('./baseline', 'grapheraser', f'{args.data}_shards_{args.partition}.list')
+    # if os.path.exists(shards_path):
+    #     with open(shards_path, 'rb') as fp:
+    #         shards = pickle.load(fp)
+    # else:
+    nodes = data['nodes']
+    edges = data['edges']
+
+    args.num_shards = 20
+    args.max_t = 10
+
+    if args.partition == 'blpa':
+        adj_list = defaultdict(set)
+        for v1, v2 in edges:
+            adj_list[v1].add(v2)
+            adj_list[v2].add(v1)
+        shards = _blpa(nodes, adj_list, args.num_shards, 150, args.max_t)
+    elif args.partition == 'bekm':
+        shards = _bekm(args, data, args.num_shards, 150, args.max_t)
+    # with open(shards_path, 'wb') as fp:
+    #     pickle.dump(shards, fp)
 
     shard_edges = []
     for shard in shards:
@@ -190,37 +194,40 @@ def train(args, data, device):
                 _edges.append((v1, v2))
         shard_edges.append(_edges)
 
-    shard_models_path = os.path.join('./baseline', args.baseline,
+    shard_models_path = os.path.join(path, 'grapheraser',
                                      f'{args.model}_{args.data}_shard_models_feature_{args.partition}.list'
                                      if args.feature else f'{args.model}_{args.data}_shard_models_{args.partition}.list')
-    if os.path.exists(shard_models_path):
-        with open(shard_models_path, 'rb') as fp:
-            shard_models = pickle.load(fp)
-    else:
-        shard_models = []
-        for shard, _edges in tqdm(zip(shards, shard_edges), total=len(shards)):
-            data_ = copy.deepcopy(data)
-            data_['edges'] = _edges
-            data_['nodes'] = [v for v in shard]
-            labels = [data['labels'][v] for v in shard]
-            data_['train_set'] = CoraDataset(shard, labels)
-            data_['valid_set'] = data['test_set']
-            model = train_model(args, data_, eval=False, verbose=False, device=device)
-            shard_models.append(model)
-        with open(shard_models_path, 'wb') as fp:
-            pickle.dump(shard_models, fp)
+    # if os.path.exists(shard_models_path):
+    #     with open(shard_models_path, 'rb') as fp:
+    #         shard_models = pickle.load(fp)
+    # else:
+    t0 = time.time()
+    shard_models = []
+    for shard, _edges in tqdm(zip(shards, shard_edges), total=len(shards)):
+        data_ = copy.deepcopy(data)
+        data_['edges'] = _edges
+        data_['nodes'] = [v for v in shard]
+        labels = [data['labels'][v] for v in shard]
+        data_['train_set'] = CoraDataset(shard, labels)
+        data_['valid_set'] = data['test_set']
+        model = train_model(args, data_, eval=False, verbose=False, device=device)
+        shard_models.append(model)
+    duration = time.time() - t0
+    with open(shard_models_path, 'wb') as fp:
+        pickle.dump(shard_models, fp)
 
     if args.aggr == 'majority':
         acc, precision, recall, f1 = _majority_aggr(data, shard_models, shard_edges, device)
     elif args.aggr == 'mean':
         acc, precision, recall, f1 = _mean_aggr(data, shard_models, shard_edges, device)
-    print('Result:')
-    print(
-        f'  Accuracy: {np.mean(acc):.4f}, Precision: {np.mean(precision):.4f}, Recall: {np.mean(recall):.4f}, F1: {np.mean(f1):.4f}.')
+    return acc, f1, duration
+    # print('Result:')
+    # print(
+    #     f'  Accuracy: {np.mean(acc):.4f}, Precision: {np.mean(precision):.4f}, Recall: {np.mean(recall):.4f}, F1: {np.mean(f1):.4f}.')
 
 
-def unlearn(args, data, edges_to_forget, device):
-    shards_path = os.path.join('./baseline', args.baseline, f'{args.data}_shards_{args.partition}.list')
+def unlearn(args, data, edges_to_forget, device, path='./baseline'):
+    shards_path = os.path.join('./baseline', 'grapheraser', f'{args.data}_shards_{args.partition}.list')
     with open(shards_path, 'rb') as fp:
         shards = pickle.load(fp)
 
@@ -232,7 +239,7 @@ def unlearn(args, data, edges_to_forget, device):
                 _edges.append((v1, v2))
         shard_edges.append(_edges)
 
-    shard_models_path = os.path.join('./baseline', args.baseline,
+    shard_models_path = os.path.join(path, 'grapheraser',
                                      f'{args.model}_{args.data}_shard_models_feature_{args.partition}.list'
                                      if args.feature else f'{args.model}_{args.data}_shard_models_{args.partition}.list')
     with open(shard_models_path, 'rb') as fp:
@@ -241,27 +248,47 @@ def unlearn(args, data, edges_to_forget, device):
     t0 = time.time()
     unlearn_shard_models = []
     unlearn_shard_edges = []
+    retrain_count = 0
+    num_left_edges_list = []
+    num_epochs_list = []
+    _args = copy.deepcopy(args)
+    _args.epochs = 100
     for model, edges in zip(shard_models, shard_edges):
         overlapped = set(edges).intersection(set(edges_to_forget))
+        _edges = remove_undirected_edges(list(set(edges)), edges_to_forget)
+        if len(_edges) == 0:
+            continue
         if len(overlapped) > 0:
-            _edges = [e for e in edges if e not in overlapped]
             data_ = copy.deepcopy(data)
             data_['edges'] = _edges
             data_['nodes'] = [v for v in shard]
             labels = [data['labels'][v] for v in shard]
             data_['train_set'] = CoraDataset(shard, labels)
             data_['valid_set'] = data['test_set']
-            model = train_model(args, data_, eval=False, verbose=False, device=device)
+            _model = train_model(_args, data_, eval=False, verbose=False, device=device)
+            unlearn_shard_models.append(_model)
             unlearn_shard_edges.append(_edges)
+            retrain_count += 1
 
-        unlearn_shard_models.append(model)
-        unlearn_shard_edges.append(edges)
+            num_left_edges_list.append(len(edges))
+            # num_epochs_list.append(num_epochs)
+        else:
+            unlearn_shard_models.append(model)
+            unlearn_shard_edges.append(edges)
 
-    print(f'unlearning duration: {(time.time() - t0):.4f}.')
+    # print(f'unlearning duration: {(time.time() - t0):.4f}.')
     if args.aggr == 'majority':
         acc, precision, recall, f1 = _majority_aggr(data, unlearn_shard_models, unlearn_shard_edges, device)
     elif args.aggr == 'mean':
         acc, precision, recall, f1 = _mean_aggr(data, unlearn_shard_models, unlearn_shard_edges, device)
-    print('Result:')
-    print(
-        f'  Accuracy: {np.mean(acc):.4f}, Precision: {np.mean(precision):.4f}, Recall: {np.mean(recall):.4f}, F1: {np.mean(f1):.4f}.')
+
+    duration = time.time() - t0
+    # print(f'{args.partition}, forgetting {len(edges_to_forget)} edges:')
+    # print(f'  Avg # of edge in shards is {np.mean(num_left_edges_list)}.')
+    # print(f'  Duration: {duration:.2f}.')
+    # print(f'  Avg # of epochs: {np.mean(num_epochs_list)}.')
+
+    # print('Result:')
+    # print(
+    #     f'  Accuracy: {np.mean(acc):.4f}, Precision: {np.mean(precision):.4f}, Recall: {np.mean(recall):.4f}, F1: {np.mean(f1):.4f}.')
+    return duration, acc, f1, retrain_count

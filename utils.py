@@ -1,7 +1,9 @@
 import os
+import copy
 import pickle
 import random
-import numpy as np
+from socket import AF_IPX
+from scipy.stats import entropy
 import torch
 from collections import defaultdict
 from model import GNN
@@ -86,7 +88,11 @@ def save_model(args, model, type='original', edges=None, edge=None, node=None):
 
 def sample_edges(args, data, method='random'):
     if method == 'random':
-        edges_to_forget = [e for e in data['edges']]
+        edges_to_forget = []
+        for v1, v2 in data['edges']:
+            if (v1, v2) in edges_to_forget or (v2, v1) in edges_to_forget:
+                continue
+            edges_to_forget.append((v1, v2))
         random.shuffle(edges_to_forget)
     elif method == 'degree':
         node_degree = defaultdict(int)
@@ -96,39 +102,52 @@ def sample_edges(args, data, method='random'):
         edge_degree = {(e[0], e[1]): node_degree[e[0]] + node_degree[e[1]] for e in data['edges']}
         sorted_edge_degree = {k: v for k, v in sorted(
             edge_degree.items(), key=lambda item: item[1], reverse=args.max_degree)}
-        edges_to_forget = list(sorted_edge_degree.keys())
+
+        edges_to_forget = []
+        for v1, v2 in sorted_edge_degree.keys():
+            if (v2, v1) in edges_to_forget:
+                continue
+            assert (v1, v2) not in edges_to_forget, '!!!!!!'
+            edges_to_forget.append((v1, v2))
     elif method == 'loss_diff':
         edge2loss_diff = find_loss_difference(args, data['edges'])
         sorted_edge2loss_diff = {k: v for k, v in sorted(edge2loss_diff.items(), key=lambda x: abs(x[1]), reverse=True)}
         edges_to_forget = list(sorted_edge2loss_diff.keys())
+    elif method == 'saliency':
+        saliency_edges_path = os.path.join('./data', args.data, f'sorted_saliency_edges_{args.model}.list')
+        with open(saliency_edges_path, 'rb') as fp:
+            edges_to_forget = pickle.load(fp)
+    elif method == 'same_class':
+        edges_to_forget = []
+        for v1, v2 in data['edges']:
+            if data['labels'][v1] == data['labels'][v2]:
+                edges_to_forget.append((v1, v2))
+        random.shuffle(edges_to_forget)
+    elif method == 'diff_class':
+        edges_to_forget = []
+        for v1, v2 in data['edges']:
+            if data['labels'][v1] != data['labels'][v2]:
+                edges_to_forget.append((v1, v2))
+        random.shuffle(edges_to_forget)
     else:
         raise ValueError(f'Invalid sample method: {method}.')
 
     return edges_to_forget
 
 
-def sample_nodes(args, data, method='loss_diff', num_nodes=-1):
-    n = int(num_nodes * 0.01 * len(data['train_set'])) if num_nodes != -1 else 1
+def sample_nodes(args, data):
+    if args.method == 'random':
+        nodes_to_forget = copy.deepcopy(data['train_set'].nodes)
+        random.shuffle(nodes_to_forget)
+    elif args.method == 'degree':
+        node_degree = defaultdict(int)
+        for v1, v2 in data['edges']:
+            node_degree[v1] += 1
+            node_degree[v2] += 1
+        sorted_node_degree = {k: v for k, v in sorted(node_degree.items(), key=lambda x: x[1], reverse=args.max_degree)}
+        nodes_to_forget = [node for node in list(sorted_node_degree.keys()) if node in data['train_set'].nodes]
 
-    if method == 'random':
-        indices = list(range(len(data['train_set'])))
-        random.shuffle(indices)
-        sampled_nodes = np.array(data['train_set'].nodes)[indices]
-        sampled_labels = np.array(data['train_set'].labels)[indices]
-    elif method == 'degree':
-        raise NotImplementedError()
-    elif method == 'loss_diff':
-        node2loss_diff = find_loss_difference_node(
-            args, [(n, l) for n, l in zip(data['train_set'].nodes, data['train_set'].labels)])
-        sorted_node2loss_diff = {k: v for k, v in sorted(node2loss_diff.items(), key=lambda x: abs(x[1]), reverse=True)}
-        sampled = np.array(list(sorted_node2loss_diff.keys()))
-        sampled_nodes = sampled[:, 0]
-        sampled_labels = sampled[:, 1]
-
-    if num_nodes == -1:
-        return sampled_nodes[0], sampled_labels[0]
-    else:
-        return sampled_nodes[:n], sampled_labels[:n]
+    return nodes_to_forget
 
 
 def loss_of_test_nodes(args, data, device=torch.device('cpu')):
@@ -174,3 +193,30 @@ def find_loss_difference_node(args, nodes_to_forget):
 
     result = {(n, l): edge2loss_diff[(n, l)] for n, l in nodes_to_forget}
     return result
+
+
+def remove_undirected_edges(edges, edges_to_remove):
+    _edges = copy.deepcopy(edges)
+    for e in edges_to_remove:
+        if e in _edges:
+            _edges.remove(e)
+        if (e[1], e[0]) in _edges:
+            _edges.remove((e[1], e[0]))
+    return _edges
+
+
+def edges_remove_nodes(edges, nodes_to_remove):
+    _edges = [(v1, v2) for v1, v2 in edges if v1 not in nodes_to_remove and v2 not in nodes_to_remove]
+    return _edges
+
+
+def train_set_remove_nodes(data, nodes_to_remove):
+    _data = copy.deepcopy(data)
+    for node in nodes_to_remove:
+        _data['train_set'].remove(node)
+    return _data
+
+
+def JSD(P, Q):
+    _M = 0.5 * (P + Q)
+    return 0.5 * (entropy(P, _M, axis=1) + entropy(Q, _M, axis=1))

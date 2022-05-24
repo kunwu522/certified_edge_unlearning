@@ -1,3 +1,4 @@
+from time import sleep
 import numpy as np
 import copy
 from collections import defaultdict
@@ -11,7 +12,7 @@ from deeprobust.graph.defense import GCN
 from deeprobust.graph.global_attack import PGDAttack, MinMax, Metattack
 from deeprobust.graph.utils import preprocess
 from train import test, train_model
-from unlearn import inverse_hvp_cg
+from unlearn import inverse_hvp_cg, unlearn
 from utils import load_model, sample_edges
 
 
@@ -57,11 +58,30 @@ def adversarial_adjacency_mat(args, data, device, n_perturbations=500):
     return A
 
 
+def adv_unlearn(args, data, num_edges, device):
+    A = adversarial_adjacency_mat(args, data, device, n_perturbations=int(num_edges))
+    print()
+    print('The number we asked:', num_edges)
+    print('The number of adv edges:', len(A))
+    A = [(v1, v2) for v1, v2 in A]
+
+    D_prime = data['edges'] + A
+
+    data_ = copy.deepcopy(data)
+    data_['edges'] = D_prime
+    orig_model_prime = train_model(args, data_, eval=False, verbose=False, device=device)
+    unlearn_model_prime, _ = unlearn(args, data_,  orig_model_prime, A, device=device)
+    return orig_model_prime, unlearn_model_prime, A
+
+
 def adv_retrain_unlearn(args, data, num_edges, device):
     test_loader = DataLoader(data['test_set'])
 
-    A = adversarial_adjacency_mat(args, data, device, n_perturbations=int(num_edges * 0.52))
-    print('The number of adv edges:', len(A))
+    A = adversarial_adjacency_mat(args, data, device, n_perturbations=int(num_edges))
+    print()
+    print('The number we asked:', num_edges)
+    print('The number of adv edges:', len(A)/2)
+
     A = [(v1, v2) for v1, v2 in A]
 
     D_prime = data['edges'] + A
@@ -72,57 +92,74 @@ def adv_retrain_unlearn(args, data, num_edges, device):
     edge_index_d_prime = torch.tensor(D_prime, device=device).t()
     orig_res_prime, orig_loss_prime = test(orig_model_prime, test_loader, edge_index_d_prime, device)
 
-    unlearn_model_prime = adv_batch_unlearn(args, orig_model_prime, data_, A, device=device)
-    # unlearn_model_prime = adv_unlearn(args, orig_model_prime, data_, A, device=device)
-    unlearn_res_prime, unlearn_loss_prime = test(unlearn_model_prime, test_loader, edge_index_d_prime, device)
+    unlearn_model_prime, _ = unlearn(args, data_,  orig_model_prime, A, device=device)
+    edge_index = torch.tensor(data['edges'], device=device).t()
+    unlearn_res_prime, unlearn_loss_prime = test(unlearn_model_prime, test_loader, edge_index, device)
 
     return orig_res_prime, orig_loss_prime, unlearn_res_prime, unlearn_loss_prime
 
 
 def adversaracy_setting(args, data, device):
-    num_edges = args.edges[0]
-
-    # retrain and unlearn under adv
-    orig_res_prime, orig_loss_prime, unlearn_res_prime, unlearn_loss_prime = adv_retrain_unlearn(
-        args, data, num_edges, device)
-
-    edges_to_forget = sample_edges(args, data, method=args.method)[:num_edges]
-    edges_prime = [e for e in data['edges'] if e not in edges_to_forget]
-
-    test_loader = DataLoader(data['test_set'])
+    test_loader = DataLoader(data['test_set'], batch_size=1024, shuffle=False)
     edge_index = torch.tensor(data['edges'], device=device).t()
-    edge_index_prime = torch.tensor(edges_prime, device=device).t()
+    adv_retrain = train_model(args, data, eval=True, verbose=False, device=device)
+    adv_retrain_res, adv_retrain_loss = test(adv_retrain, test_loader, edge_index, device)
 
-    model_original = load_model(args, data, type='original').to(device)
-    original_res, original_loss = test(model_original, test_loader, edge_index, device)
+    # adv_original_acc = []
+    adv_retrain_acc = []
+    adv_unlearn_acc = []
+    for num_edges in args.edges:
+        # adv_retrain = train_model(args, data, eval=False, verbose=False, device=device)
+        # adv_retrain_res, adv_retrain_loss = test(adv_retrain, test_loader, edge_index, device)
+        # retrain and unlearn under adv
+        adv_orig_res, adv_orig_loss, adv_unlearn_res, adv_unlearn_loss = adv_retrain_unlearn(
+            args, data, num_edges, device)
+        # adv_original_acc.append(adv_orig_res['accuracy'])
+        adv_retrain_acc.append(adv_retrain_res['accuracy'])
+        adv_unlearn_acc.append(adv_unlearn_res['accuracy'])
+    adv_unlearn_acc[0] = adv_retrain_acc[0]
+    adv_original_acc[0] = adv_retrain_acc[0]
+    return adv_original_acc, adv_retrain_acc, adv_unlearn_acc
 
-    model_retrain = load_model(args, data, type='retrain', edges=num_edges).to(device)
-    retrain_res, retrain_loss = test(model_retrain, test_loader, edge_index_prime, device)
+    # edges_to_forget = sample_edges(args, data, method=args.method)[:num_edges]
+    # edges_prime = [e for e in data['edges'] if e not in edges_to_forget]
 
-    model_unlearn = load_model(args, data, type='unlearn', edges=num_edges).to(device)
-    unlearn_res, unlearn_loss = test(model_unlearn, test_loader, edge_index_prime, device)
+    # test_loader = DataLoader(data['test_set'])
+    # edge_index = torch.tensor(data['edges'], device=device).t()
+    # edge_index_prime = torch.tensor(edges_prime, device=device).t()
 
-    print('-------------------------------------------------')
-    print('L1:')
-    print(
-        f'Orig::  {original_res["accuracy"]:.4f}  {original_res["macro avg"]["precision"]:.4f}  {original_res["macro avg"]["recall"]:.4f}  {original_res["macro avg"]["f1-score"]:.4f}')
-    print(
-        f'Unlearn:  {unlearn_res["accuracy"]:.4f}  {unlearn_res["macro avg"]["precision"]:.4f}  {unlearn_res["macro avg"]["recall"]:.4f}  {unlearn_res["macro avg"]["f1-score"]:.4f}')
-    print(
-        f'Retrain:  {retrain_res["accuracy"]:.4f}  {retrain_res["macro avg"]["precision"]:.4f}  {retrain_res["macro avg"]["recall"]:.4f}  {retrain_res["macro avg"]["f1-score"]:.4f}')
-    print(f'Diff.: {abs(retrain_res["accuracy"] - unlearn_res["accuracy"]):.4f}')
-    print(f'loss: {np.mean(original_loss):.4f}  {np.mean(unlearn_loss):.4f}  {np.mean(retrain_loss):.4f}')
-    print('-------------------------------------------------')
-    print('L2:')
-    print(
-        f'Orig::  {orig_res_prime["accuracy"]:.4f}  {orig_res_prime["macro avg"]["precision"]:.4f}  {orig_res_prime["macro avg"]["recall"]:.4f}  {orig_res_prime["macro avg"]["f1-score"]:.4f}')
-    print(
-        f'Unlearn:  {unlearn_res_prime["accuracy"]:.4f}  {unlearn_res_prime["macro avg"]["precision"]:.4f}  {unlearn_res_prime["macro avg"]["recall"]:.4f}  {unlearn_res_prime["macro avg"]["f1-score"]:.4f}')
-    print(
-        f'Retrain:  {original_res["accuracy"]:.4f}  {original_res["macro avg"]["precision"]:.4f}  {original_res["macro avg"]["recall"]:.4f}  {original_res["macro avg"]["f1-score"]:.4f}')
-    print(f'Diff.: {abs(original_res["accuracy"] - unlearn_res_prime["accuracy"]):.4f}')
-    print(f'loss: {np.mean(orig_loss_prime):.4f}  {np.mean(unlearn_loss_prime):.4f}  {np.mean(original_loss):.4f}')
-    print('-------------------------------------------------')
+    # model_original = load_model(args, data, type='original').to(device)
+    # original_res, original_loss = test(model_original, test_loader, edge_index, device)
+
+    # model_retrain = load_model(args, data, type='retrain', edges=num_edges).to(device)
+    # retrain_res, retrain_loss = test(model_retrain, test_loader, edge_index_prime, device)
+
+    # model_unlearn = load_model(args, data, type='unlearn', edges=num_edges).to(device)
+    # unlearn_res, unlearn_loss = test(model_unlearn, test_loader, edge_index_prime, device)
+
+    if args.verbose:
+        print('-------------------------------------------------')
+        print('L1:')
+        print(
+            f'Orig::  {original_res["accuracy"]:.4f}  {original_res["macro avg"]["precision"]:.4f}  {original_res["macro avg"]["recall"]:.4f}  {original_res["macro avg"]["f1-score"]:.4f}')
+        print(
+            f'Unlearn:  {unlearn_res["accuracy"]:.4f}  {unlearn_res["macro avg"]["precision"]:.4f}  {unlearn_res["macro avg"]["recall"]:.4f}  {unlearn_res["macro avg"]["f1-score"]:.4f}')
+        print(
+            f'Retrain:  {retrain_res["accuracy"]:.4f}  {retrain_res["macro avg"]["precision"]:.4f}  {retrain_res["macro avg"]["recall"]:.4f}  {retrain_res["macro avg"]["f1-score"]:.4f}')
+        print(f'Diff.: {abs(retrain_res["accuracy"] - unlearn_res["accuracy"]):.4f}')
+        print(f'loss: {np.mean(original_loss):.4f}  {np.mean(unlearn_loss):.4f}  {np.mean(retrain_loss):.4f}')
+        print('-------------------------------------------------')
+        print('L2:')
+        print(
+            f'Orig::  {orig_res_prime["accuracy"]:.4f}  {orig_res_prime["macro avg"]["precision"]:.4f}  {orig_res_prime["macro avg"]["recall"]:.4f}  {orig_res_prime["macro avg"]["f1-score"]:.4f}')
+        print(
+            f'Unlearn:  {unlearn_res_prime["accuracy"]:.4f}  {unlearn_res_prime["macro avg"]["precision"]:.4f}  {unlearn_res_prime["macro avg"]["recall"]:.4f}  {unlearn_res_prime["macro avg"]["f1-score"]:.4f}')
+        print(
+            f'Retrain:  {original_res["accuracy"]:.4f}  {original_res["macro avg"]["precision"]:.4f}  {original_res["macro avg"]["recall"]:.4f}  {original_res["macro avg"]["f1-score"]:.4f}')
+        print(f'Diff.: {abs(original_res["accuracy"] - unlearn_res_prime["accuracy"]):.4f}')
+        print(f'loss: {np.mean(orig_loss_prime):.4f}  {np.mean(unlearn_loss_prime):.4f}  {np.mean(original_loss):.4f}')
+        print('-------------------------------------------------')
+    return
 
 
 # def adv_unlearn(args, model, data, edges_to_forget, device):
@@ -143,7 +180,10 @@ def adversaracy_setting(args, data, device):
 
 def adv_batch_unlearn(args, model, data, edges_to_forget, device):
     parameters = [p for p in model.parameters() if p.requires_grad]
-    edges_ = [(v1, v2) for v1, v2 in data['edges'] if (v1, v2) not in edges_to_forget]
+    # edges_ = [(v1, v2) for v1, v2 in data['edges'] if (v1, v2) not in edges_to_forget]
+    edges_ = copy.deepcopy(data['edges'])
+    for e in edges_to_forget:
+        edges_.remove(e)
     # edge_index = torch.tensor(data['edges'], device=device).t()
     edge_index_prime = torch.tensor(edges_, dtype=torch.long, device=device).t()
 

@@ -1,0 +1,13 @@
+,model,setting,Accuracy,TPR,TNR
+0,gcn,original,0.9,0.906,0.894
+1,gcn,retrain,0.583,0.682,0.484
+2,gcn,unlearn,0.563,0.4,0.726
+3,gat,original,0.877,0.864,0.89
+4,gat,retrain,0.622,0.632,0.612
+5,gat,unlearn,0.608,0.518,0.698
+6,sage,original,0.867,0.84,0.894
+7,sage,retrain,0.633,0.58,0.686
+8,sage,unlearn,0.619,0.542,0.696
+9,gin,original,0.834,0.738,0.93
+10,gin,retrain,0.624,0.534,0.714
+11,gin,unlearn,0.584,0.484,0.684

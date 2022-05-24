@@ -1,12 +1,13 @@
 from audioop import bias
 import torch
 import torch.nn as nn
+from torch_geometric.nn.models import MLP
 from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv
 
 
 class GNN(nn.Module):
 
-    def __init__(self, num_nodes, embedding_size, hidden_sizes, num_classes, weights, feature_update, model):
+    def __init__(self, num_nodes, embedding_size, hidden_sizes, num_classes, weights, feature_update, model, dropout=0.5):
 
         super(GNN, self).__init__()
 
@@ -14,19 +15,20 @@ class GNN(nn.Module):
         # self.embedding.weight.requires_grad = False
         self.embedding.weight = nn.Parameter(torch.from_numpy(weights).float(), requires_grad=feature_update)
 
-        def gnn_layer(model, input_size, out_size):
+        def gnn_layer(model, input_size, out_size, dropout):
             if model == 'gcn':
                 gnn = GCNConv(input_size, out_size, bias=True)
             elif model == 'gat':
-                gnn = GATConv(input_size, out_size, bias=True)
+                gnn = GATConv(input_size, out_size, bias=True, dropout=dropout)
             elif model == 'sage':
                 gnn = SAGEConv(input_size, out_size, bias=True)
             elif model == 'gin':
-                mlp = nn.Sequential(
-                    nn.Linear(input_size, int(input_size/2)),
-                    nn.ReLU(),
-                    nn.Linear(int(input_size/2), out_size)
-                )
+                mlp = MLP([input_size, out_size], batch_norm=True)
+                # mlp = nn.Sequential(
+                #     nn.Linear(input_size, int(input_size)),
+                #     nn.ReLU(),
+                #     nn.Linear(int(input_size), out_size)
+                # )
                 # mlp = nn.Linear(input_size, out_size)
                 gnn = GINConv(mlp)
             else:
@@ -36,24 +38,27 @@ class GNN(nn.Module):
         self.gnns = nn.ModuleList()
         output_size = embedding_size
         for hidden_size in hidden_sizes:
-            self.gnns.append(gnn_layer(model, output_size, hidden_size))
+            self.gnns.append(gnn_layer(model, output_size, hidden_size, dropout))
             output_size = hidden_size
-        self.gnns.append(gnn_layer(model, output_size, num_classes))
+        self.gnns.append(gnn_layer(model, output_size, num_classes, dropout))
 
         self.ce = nn.CrossEntropyLoss()
         self.ce2 = nn.CrossEntropyLoss(reduction='none')
         self.ce3 = nn.CrossEntropyLoss(reduction='sum')
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=dropout)
 
-    def forward(self, nodes, edge_index):
+    def forward(self, nodes, edge_index, v=None, delta=None):
         x = self.embedding.weight
+        if v is not None and delta is not None:
+            x += delta
+
         for i, gnn in enumerate(self.gnns):
             if i == len(self.gnns) - 1:
                 x = gnn(x, edge_index)
             else:
-                # x = torch.sigmoid(gnn(x, edge_index))
                 x = self.relu(gnn(x, edge_index))
-                # x = gnn(x, edge_index)
+                x = self.dropout(x)
         return x[nodes]
 
     def loss(self, y_hat, y):

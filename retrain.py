@@ -1,43 +1,30 @@
 import os
 import copy
+import time
 import pickle
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from train import train_model
-from utils import load_model, loss_of_test_nodes
+from utils import load_model, loss_of_test_nodes, remove_undirected_edges, train_set_remove_nodes, edges_remove_nodes
 
 
-def retrain(args, data, edges_to_forget, device, forget_all=False):
-    # print('Start to retrain...')
-
-    if forget_all:
-        edges_ = [(v1, v2) for v1, v2 in data['edges'] if (v1, v2) not in edges_to_forget]
-        data_ = copy.deepcopy(data)
-        data_['edges'] = edges_
-        # print(f'Original number of edges {data["num_edges"]}, retrain with {len(data_["edges"])}.')
-        retrain_model = train_model(args, data_, eval=False, device=device, verbose=False)
-        # print('Retraining finished.')
-        # print()
-        return retrain_model
-
-    edges_ = [(v1, v2) for v1, v2 in data['edges']]
-    for edge in tqdm(edges_to_forget, desc='  retraining'):
-        v1, v2 = edge
-
-        retrain_model_path = os.path.join('./checkpoint', args.data, 'edges',
-                                          f'{args.model}_{args.data}_{v1}_{v2}_best.pt')
-        if os.path.exists(retrain_model_path):
-            continue
-        edges_.remove((v1, v2))
-        data_ = copy.deepcopy(data)
-        data_['edges'] = edges_
-        retrain_model = train_model(args, data_, eval=False, device=device, verbose=False)
-        torch.save(retrain_model.state_dict(), retrain_model_path)
-        edges_ = [(v1, v2) for v1, v2 in data['edges']]
-
-    print('Retraining finished.')
-    print()
+def retrain(args, data, edges_to_forget, device, verbose=False, return_epoch=False):
+    _edges = remove_undirected_edges(data['edges'], edges_to_forget)
+    _data = copy.deepcopy(data)
+    _data['edges'] = _edges
+    # print(f'Original number of edges {data["num_edges"]}, retrain with {len(data_["edges"])}.')
+    t0 = time.time()
+    if return_epoch:
+        retrain_model, num_epochs = train_model(
+            args, _data, eval=False, device=device, verbose=verbose, return_epoch=return_epoch)
+    else:
+        retrain_model = train_model(args, _data, eval=False, device=device, verbose=verbose, return_epoch=return_epoch)
+    duration = time.time() - t0
+    if return_epoch:
+        return retrain_model, duration, num_epochs
+    else:
+        return retrain_model, duration
 
 
 def loss_difference(args, data, edges, device):
@@ -84,26 +71,12 @@ def loss_difference(args, data, edges, device):
     return result
 
 
-def retrain_node(args, data, nodes_to_forget, device, forget_all=False):
-    print('Start to retrain...')
-
-    # if forget_all:
-    #     data_ = copy.deepcopy(data)
-    #     data_['edges'] = edges_
-    #     retrain_model = train_model(args, data_, eval=False, device=device, verbose=False)
-    #     print('Retraining finished.')
-    #     print()
-    #     return retrain_model
-
-    for node in tqdm(nodes_to_forget, desc='  retraining'):
-        data_ = copy.deepcopy(data)
-        data_['train_set'].remove(node)
-        retrain_model = train_model(args, data_, eval=False, device=device, verbose=False)
-        torch.save(retrain_model.state_dict(), os.path.join(
-            './checkpoint', args.data, 'nodes', f'gcn_{args.data}_{node}_best.pt'))
-
-    print('Retraining finished.')
-    print()
+def retrain_node(args, data, nodes_to_forget, device):
+    _data = train_set_remove_nodes(data, nodes_to_forget)
+    _data['edges'] = edges_remove_nodes(data['edges'], nodes_to_forget)
+    t0 = time.time()
+    retrain_model = train_model(args, _data, eval=False, device=device, verbose=False)
+    return retrain_model, time.time() - t0
 
 
 def loss_difference_node(args, data, device):

@@ -1,0 +1,3 @@
+,data,model,setting,linkteller
+0,citeseer,gin,retrain,0.0
+1,citeseer,gin,unlearn,0.0

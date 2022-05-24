@@ -4,15 +4,15 @@ import numpy as np
 import time
 import math
 import torch
+import copy
+import random
 from torch.utils.data import DataLoader
 from torch.autograd import grad
 from tqdm import tqdm
 from train import test
-from scipy.optimize import fmin_ncg
-from utils import load_model, sample_nodes, loss_of_test_nodes, save_model
+from scipy.optimize import fmin_ncg, fmin_l_bfgs_b, fmin_cg
+from utils import create_model, edges_remove_nodes, load_model, remove_undirected_edges, sample_nodes, loss_of_test_nodes, save_model, train_set_remove_nodes
 from hessian import hessian_vector_product, hessian
-
-# damping = 0.001
 
 
 def _hessian_vector_product(model, edge_index, x, y, v, device):
@@ -40,36 +40,6 @@ def _hessian_vector_product(model, edge_index, x, y, v, device):
     return hvps
 
 
-def inverse_hvp_lissa(args, data, model, edge_index, v, device):
-    r = args.r
-    recursion_depth = args.depth
-    scale = args.scale
-    damping = 0.
-
-    inverse_hvps = None
-    for _ in range(r):
-        cur_estimate = v
-        for t in range(recursion_depth):
-            sampled_node, sampled_label = sample_nodes(args, data, method='random', num_nodes=20)
-            sampled_node = torch.tensor(sampled_node, device=device)
-            sampled_label = torch.tensor(sampled_label, device=device)
-            # sampled_node = torch.tensor(data['train_set'].nodes, device=device)
-            # sampled_label = torch.tensor(data['train_set'].labels, device=device)
-
-            hvps = _hessian_vector_product(model, edge_index,
-                                           sampled_node, sampled_label,
-                                           cur_estimate, device)
-            cur_estimate = [a + (1-damping) * b - c / scale for a, b, c in zip(v, cur_estimate, hvps)]
-
-        if inverse_hvps is None:
-            inverse_hvps = [b/scale for b in cur_estimate]
-        else:
-            inverse_hvps = [a + b / scale for (a, b) in zip(inverse_hvps, cur_estimate)]
-
-    inverse_hvps = [a / r for a in inverse_hvps]
-    return inverse_hvps
-
-
 def to_vector(v):
     if isinstance(v, tuple) or isinstance(v, list):
         # return v.cpu().numpy().reshape(-1)
@@ -93,6 +63,7 @@ def _mini_batch_hvp(x, **kwargs):
     model = kwargs['model']
     train_loader = kwargs['train_loader']
     edge_index = kwargs['edge_index']
+    # edge_index_prime = kwargs['edge_index_prime'],
     damping = kwargs['damping']
     device = kwargs['device']
     sizes = kwargs['sizes']
@@ -103,19 +74,22 @@ def _mini_batch_hvp(x, **kwargs):
     for nodes, labels in train_loader:
         nodes = nodes.to(device)
         labels = labels.to(device)
-        _hvp = hessian_vector_product(model, edge_index, nodes, labels, (x.view(sizes[0]),), device, p_idx)
+        _hvp, L = hessian_vector_product(model, edge_index, nodes, labels, (x.view(sizes[0]),), device, p_idx)
         if hvp is None:
             hvp = [b for b in _hvp]
         else:
             hvp = [a + b for a, b in zip(hvp, _hvp)]
     # return [a + b * damping for (a, b) in zip(hvp, x)]
-    return hvp[0].view(-1) + damping * x
+    # return hvp[0].view(-1)
+    return hvp[0].view(-1) + damping * x, L
 
 
 def _hessain_hvp(x, **kwargs):
+    # print('x:', x.shape)
     damping = kwargs['damping']
-    B = kwargs['H']
     device = kwargs['device']
+    B = kwargs['H'].view(x.shape[0], x.shape[0])
+    # B = torch.cat([b.view(-1) for b in B]).view(x.shape[0], x.shape[0]).to(device)
 
     # xx = torch.from_numpy(x).to(device)
     # hvp = np.dot(B.reshape(int(math.sqrt(total)), int(math.sqrt(total))), x)
@@ -128,17 +102,15 @@ def _get_fmin_loss_fn(v, **kwargs):
 
     def get_fmin_loss(x):
         x = torch.tensor(x, dtype=torch.float, device=device)
-        if 'H' not in kwargs:
-            hvp = _mini_batch_hvp(x, **kwargs)
+        if kwargs['H'] is None:
+            hvp, L = _mini_batch_hvp(x, **kwargs)
             obj = 0.5 * torch.dot(hvp, x) - torch.dot(v.view(-1), x)
-            return to_vector(obj)
-            # return 0.5 * np.dot(to_vector(hvp), x) - np.dot(to_vector(v), x)
+            return obj.detach().cpu().numpy()
         else:
             # _v = torch.from_numpy(v).to(device)
             hvp = _hessain_hvp(x, **kwargs)
             obj = 0.5 * torch.dot(hvp, x) - torch.dot(v.view(-1), x)
             return to_vector(obj)
-            # return 0.5 * np.dot(hvp, x) - np.dot(to_vector(v), x)
     return get_fmin_loss
 
 
@@ -147,8 +119,8 @@ def _get_fmin_grad_fn(v, **kwargs):
 
     def get_fmin_grad(x):
         x = torch.tensor(x, dtype=torch.float, device=device)
-        if 'H' not in kwargs:
-            hvp = _mini_batch_hvp(x, **kwargs)
+        if kwargs['H'] is None:
+            hvp, _ = _mini_batch_hvp(x, **kwargs)
             return to_vector(hvp - v.view(-1))
         else:
             hvp = _hessain_hvp(x, **kwargs)
@@ -161,8 +133,8 @@ def _get_fmin_hvp_fn(v, **kwargs):
 
     def get_fmin_hvp(x, p):
         p = torch.tensor(p, dtype=torch.float, device=device)
-        if 'H' not in kwargs:
-            hvp = _mini_batch_hvp(p, **kwargs)
+        if kwargs['H'] is None:
+            hvp, _ = _mini_batch_hvp(p, **kwargs)
             return to_vector(hvp)
         else:
             hvp = _hessain_hvp(p, **kwargs)
@@ -173,13 +145,12 @@ def _get_fmin_hvp_fn(v, **kwargs):
 def _get_cg_callback(v, **kwargs):
     device = kwargs['device']
 
-    def cg_callback(x, k, k2):
+    def cg_callback(x):
         x = torch.tensor(x, dtype=torch.float, device=device)
-        hvp = _mini_batch_hvp(x, **kwargs)
+        hvp, L = _mini_batch_hvp(x, **kwargs)
         obj = 0.5 * torch.dot(hvp, x) - torch.dot(v.view(-1), x)
-
-        if k % 10 == 0 and k != 0:
-            print(f'iteration {k}/{k2}: {obj.cpu().item()}.')
+        g = to_vector(hvp - v.view(-1))
+        print(f'loss: {obj:.4f}, grad: {(np.linalg.norm(g) / g.size):.8f}')
     return cg_callback
 
 
@@ -214,60 +185,110 @@ def inverse_hvp_cg_hessian(Bs, vs, damping, device):
     return inverse_hvp, tuple(status)
 
 
-def inverse_hvp_cg(data, model, edge_index, vs, damping, device):
+def inverse_hvp_cg(data, model, edge_index, vs, damping, device, H=None):
     train_loader = DataLoader(data['train_set'], batch_size=int(len(data['train_set'])/1), shuffle=True)
 
     inverse_hvp = []
     status = []
     cg_loss = []
-    for i, v in enumerate(vs):
+    err = 0.
+    # for i, hv in enumerate(zip(H, vs)):
+    # h, v = hv
+    # h = h.to(device)
+    for i, (v, p) in enumerate(zip(vs, model.parameters())):
+        h = None
         sizes = [v.size()]
         fmin_loss_fn = _get_fmin_loss_fn(v, model=model, edge_index=edge_index,
-                                         train_loader=train_loader, damping=damping, sizes=sizes, p_idx=i, device=device)
+                                         train_loader=train_loader, damping=damping,
+                                         sizes=sizes, p_idx=i, device=device,
+                                         H=h, p=p.data.detach())
         fmin_grad_fn = _get_fmin_grad_fn(v, model=model, edge_index=edge_index,
-                                         train_loader=train_loader, damping=damping, sizes=sizes, p_idx=i, device=device)
+                                         train_loader=train_loader, damping=damping,
+                                         sizes=sizes, p_idx=i, device=device,
+                                         H=h, p=p.data.detach())
         fmin_hvp_fn = _get_fmin_hvp_fn(v, model=model, edge_index=edge_index,
-                                       train_loader=train_loader, damping=damping, sizes=sizes, p_idx=i, device=device)
+                                       train_loader=train_loader, damping=damping,
+                                       sizes=sizes, p_idx=i, device=device,
+                                       H=h, p=p.data.detach())
         cg_callback = _get_cg_callback(v, model=model, edge_index=edge_index,
-                                       train_loader=train_loader, damping=damping, sizes=sizes, p_idx=i, device=device)
-
-        res = fmin_ncg(
+                                       train_loader=train_loader, damping=damping,
+                                       sizes=sizes, p_idx=i, device=device,
+                                       H=h, p=p.data.detach())
+        res = fmin_cg(
             f=fmin_loss_fn,
             x0=to_vector(v),
             fprime=fmin_grad_fn,
-            fhess_p=fmin_hvp_fn,
+            gtol=1E-4,
+            # norm='fro',
             # callback=cg_callback,
-            avextol=1e-5,
             disp=False,
             full_output=True,
-            maxiter=100)
+            maxiter=100,
+        )
         inverse_hvp.append(to_list(res[0], sizes, device)[0])
-        status.append(res[5])
-        cg_loss.append(res[1] if isinstance(res[1], float) else res[1][0])
+        # print('-----------------------------------')
+        status.append(res[4])
+        cg_loss.append(res[1])
+
+        # res = fmin_ncg(
+        #     f=fmin_loss_fn,
+        #     x0=to_vector(v),
+        #     fprime=fmin_grad_fn,
+        #     fhess_p=fmin_hvp_fn,
+        #     callback=cg_callback,
+        #     avextol=1e-5,
+        #     disp=False,
+        #     full_output=True,
+        #     maxiter=100)
+        # inverse_hvp.append(to_list(res[0], sizes, device)[0])
+        # print('-----------------------------------')
+        # status.append(res[5])
+        # cg_loss.append(res[1])
+
+    #     x, _err, d = fmin_l_bfgs_b(
+    #         func=fmin_loss_fn,
+    #         x0=to_vector(v),
+    #         fprime=fmin_grad_fn,
+    #         iprint=0,
+    #     )
+    #     inverse_hvp.append(to_list(x, sizes, device)[0])
+    #     status.append(d['warnflag'])
+    #     err += _err.item()
+    # print('error:', err, status)
     return inverse_hvp, np.mean(cg_loss), status
 
-    # sizes = [v.size() for v in vs]
-    # fmin_loss_fn = _get_fmin_loss_fn(vs, model=model, edge_index=edge_index,
-    #                                  train_loader=train_loader, damping=damping, sizes=sizes, p_idx=None, device=device)
-    # fmin_grad_fn = _get_fmin_grad_fn(vs, model=model, edge_index=edge_index,
-    #                                  train_loader=train_loader, damping=damping, sizes=sizes, p_idx=None, device=device)
-    # fmin_hvp_fn = _get_fmin_hvp_fn(vs, model=model, edge_index=edge_index,
-    #                                train_loader=train_loader, damping=damping, sizes=sizes, p_idx=None, device=device)
 
-    # res = fmin_ncg(
-    #     f=fmin_loss_fn,
-    #     x0=to_vector(vs),
-    #     fprime=fmin_grad_fn,
-    #     fhess_p=fmin_hvp_fn,
-    #     # callback=_cg_callback,
-    #     avextol=1e-8,
-    #     disp=True,
-    #     full_output=True,
-    #     maxiter=100)
+def inverse_hvp_lissa(args, data, model, edge_index, v, device):
+    r = args.r
+    recursion_depth = args.depth
+    scale = 25
+    damping = 0.001
 
-    # inverse_hvp = res[0]
-    # status = res[5]
-    # return to_list(inverse_hvp, sizes, device), status
+    inverse_hvps = None
+    for _ in range(r):
+        cur_estimate = v
+        for t in range(recursion_depth):
+            rand_indices = list(range(len(data['train_set'])))
+            random.shuffle(rand_indices)
+            sampled_nodes = np.array(data['train_set'].nodes)[rand_indices][:10]
+            sampled_labels = np.array(data['train_set'].labels)[rand_indices][:10]
+
+            sampled_nodes = torch.tensor(sampled_nodes, device=device)
+            sampled_labels = torch.tensor(sampled_labels, device=device)
+
+            hvps, _ = hessian_vector_product(model, edge_index,
+                                             sampled_nodes, sampled_labels,
+                                             tuple(cur_estimate), device)
+
+            cur_estimate = [a + (1-damping) * b - c/scale for a, b, c in zip(v, cur_estimate, hvps)]
+
+        if inverse_hvps is None:
+            inverse_hvps = [b/scale for b in cur_estimate]
+        else:
+            inverse_hvps = [a + b / scale for (a, b) in zip(inverse_hvps, cur_estimate)]
+
+    inverse_hvps = [a / r for a in inverse_hvps]
+    return inverse_hvps
 
 
 def influence_node(args, data, train_node, test_node=None, device=torch.device('cpu')):
@@ -322,9 +343,9 @@ def influence_node(args, data, train_node, test_node=None, device=torch.device('
         return np.sum([torch.sum((inverse_hvp) * g).cpu().item() for inverse_hvp, g in zip(inverse_hvps, grad_train)]) / data['num_nodes']
 
 
-def _influence(args, data, model, parameters, edges_to_forget, device=torch.device('cpu')):
-    edges_ = [(v1, v2) for v1, v2 in data['edges'] if (v1, v2) not in edges_to_forget]
-    edge_index_prime = torch.tensor(edges_, dtype=torch.long, device=device).t()
+def _influence(args, data, model, parameters, edges_prime, device=torch.device('cpu')):
+    edge_index = torch.tensor(data['edges'], device=device).t()
+    edge_index_prime = torch.tensor(edges_prime, dtype=torch.long, device=device).t()
 
     model.eval()
     x_train = torch.tensor(data['train_set'].nodes, device=device)
@@ -332,8 +353,19 @@ def _influence(args, data, model, parameters, edges_to_forget, device=torch.devi
     y_hat = model(x_train, edge_index_prime)
     loss_prime = model.loss_sum(y_hat, y_train)
     v = grad(loss_prime, parameters)
+    H = None
+
+    # t0 = time.time()
+    # H, v = hessian(model, edge_index_prime, x_train, y_train, parameters)
+    # print(f'Finished Hessian in {(time.time() - t0):.2f}s.')
+
+    # inverse_hvps = inverse_hvp_lissa(args, data, model, edge_index_prime, v, device)
+    # return inverse_hvps
+
     # Directly approximate of H-1v
-    inverse_hvps, loss, status = inverse_hvp_cg(data, model, edge_index_prime, v, args.damping, device)
+    t0 = time.time()
+    inverse_hvps, loss, status = inverse_hvp_cg(data, model, edge_index_prime, v, args.damping, device, H)
+    print(f'Finished CG in {(time.time() - t0):.2f}s.')
 
     return inverse_hvps, loss, status
 
@@ -431,8 +463,7 @@ def influence(args, data, edge_to_forget, test_node=None, device=torch.device('c
 def _update_model_weight(parameters, inverse_hvps):
     with torch.no_grad():
         delta = [p + infl for p, infl in zip(parameters, inverse_hvps)]
-        # delta = [p + (infl/num_edge) for p, infl in zip(parameters, inverse_hvps)]
-        # delta = [p + infl / data['num_nodes'] for p, infl in zip(parameters, inverse_hvps)]
+        # delta = [p - infl for p, infl in zip(parameters, inverse_hvps)]
         for i, p in enumerate(parameters):
             p.copy_(delta[i])
 
@@ -440,22 +471,25 @@ def _update_model_weight(parameters, inverse_hvps):
 def batch_unlearn(args, data, edges_to_forget, num_edges_list, device):
     t0 = time.time()
 
-    acc, f1 = [], []
+    acc, f1, losses = [], [], []
     unlearn_time = []
     for num_edge in tqdm(num_edges_list, desc='unlearn'):
         model = load_model(args, data).to(device)
         parameters = [p for p in model.parameters() if p.requires_grad]
-        edges_ = [(v1, v2) for v1, v2 in data['edges'] if (v1, v2) not in edges_to_forget[:num_edge]]
+        edges_ = copy.deepcopy(data['edges'])
+        for e in edges_to_forget[:num_edge]:
+            edges_.remove(e)
+        # edges_ = [(v1, v2) for v1, v2 in data['edges'] if (v1, v2) not in edges_to_forget[:num_edge]]
         # edge_index = torch.tensor(data['edges'], device=device).t()
 
         t0 = time.time()
         # BU
         if args.unlearn_batch_size is not None:
-            num_batchs = math.ceil(len(edges_) / args.unlearn_batch_size)
+            num_batchs = math.ceil(len(edges_to_forget) / args.unlearn_batch_size)
             cg_losses = []
             status_count = defaultdict(int)
             for b in range(num_batchs):
-                batch_edges = edges_[b * args.unlearn_batch_size: (b + 1) * args.unlearn_batch_size]
+                batch_edges = edges_to_forget[b * args.unlearn_batch_size: (b + 1) * args.unlearn_batch_size]
                 inverse_hvps, loss, status = _influence(args, data, model, parameters, batch_edges, device=device)
                 cg_losses.append(loss)
                 for s in status:
@@ -466,7 +500,8 @@ def batch_unlearn(args, data, edges_to_forget, num_edges_list, device):
 
         else:  # DU
             # inverse_hvps, cg_loss, status = _influence_new(args, data, edges_, device=device)
-            inverse_hvps, cg_loss, status = _influence(args, data, model, parameters, edges_, device=device)
+            inverse_hvps, cg_loss, status = _influence(
+                args, data, model, parameters, edges_, device=device)
             status_count = defaultdict(int)
             for s in status:
                 status_count[s] += 1
@@ -500,13 +535,61 @@ def batch_unlearn(args, data, edges_to_forget, num_edges_list, device):
             res, loss = test(model, test_loader, edge_index_prime, device)
             acc.append(res['accuracy'])
             f1.append(res['macro avg']['f1-score'])
+            losses.append(loss)
             unlearn_time.append(duration)
 
-    return acc, f1, unlearn_time
+    return acc, f1, losses, unlearn_time
     print(f'Unlearning finsihed, duration: {(time.time() - t0):.4f}s.')
 
 
-def unlearn(args, data, edges_to_forget, num_edges_list, device, verbose=False):
+def unlearn(args, data, model, edges_to_forget, device, influence=False):
+    _model = copy.deepcopy(model)
+    parameters = [p for p in _model.parameters() if p.requires_grad]
+    _edges = remove_undirected_edges(data['edges'], edges_to_forget)
+
+    t0 = time.time()
+    inverse_hvps, cg_loss, status = _influence(
+        args, data, _model, parameters, _edges, device=device)
+    # inverse_hvps = _influence(args, data, _model, parameters, _edges, device=device)
+    status_count = defaultdict(int)
+    for s in status:
+        status_count[s] += 1
+    _update_model_weight(parameters, inverse_hvps)
+    if args.verbose:
+        print(f'direct unlearning done. cg loss: {cg_loss:.4f}, status: {dict(status_count)}.')
+    duration = time.time() - t0
+    if influence:
+        return _model, duration, [torch.linalg.norm(i.detach().cpu()) for i in inverse_hvps]
+    else:
+        return _model, duration
+
+
+def node_unlearn(args, data, model, nodes_to_forget, device):
+    t0 = time.time()
+
+    _model = copy.deepcopy(model)
+    parameters = [p for p in _model.parameters() if p.requires_grad]
+
+    _data = train_set_remove_nodes(data, nodes_to_forget)
+    _edges = edges_remove_nodes(data['edges'], nodes_to_forget)
+    inverse_hvps, cg_loss, status = _influence(
+        args, _data, _model, parameters, _edges, device=device)
+    status_count = defaultdict(int)
+    for s in status:
+        status_count[s] += 1
+    _update_model_weight(parameters, inverse_hvps)
+    if args.verbose:
+        print(f'direct unlearning done. cg loss: {cg_loss:.4f}, status: {dict(status_count)}.')
+    duration = time.time() - t0
+    return _model, duration
+
+
+def _unlearn(args, data, edges_to_forget, num_edges_list, device, verbose=False):
+    ''' Deprecated of unlearning.
+        Unlearning edges one by one has proved that has very poor performance.
+        Therefore, it is deprecated and replaced by a new unlearn function.
+        (changed the name to _unlearn())
+    '''
     t0 = time.time()
 
     model = load_model(args, data).to(device)

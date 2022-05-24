@@ -72,10 +72,11 @@ def train(args, data, model, device, verbose):
                        'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
         else:
             trail_count += 1
-            if trail_count == patience:
+            if trail_count > patience and e >= 100:
                 if verbose:
                     print(f'  Early Stop, the best Epoch is {best_epoch}, validation loss: {best_valid_loss:.4f}.')
                 break
+    return best_epoch
 
 
 def evaluate(args, data, model, device):
@@ -114,19 +115,19 @@ def test(model, test_loader, edge_index, device):
             y_pred = torch.argmax(y_hat, dim=1)
             y_preds.extend(y_pred.cpu().tolist())
             y_trues.extend(labels.cpu().tolist())
-    del model
-    torch.cuda.empty_cache()
-    res_original = classification_report(y_trues, y_preds, digits=4, output_dict=True)
-    return res_original, test_loss
+    # del model
+    # torch.cuda.empty_cache()
+    res = classification_report(y_trues, y_preds, digits=4, output_dict=True)
+    return res, np.mean(test_loss)
 
 
-def train_model(args, data, eval=True, verbose=True, device=torch.device('cpu')):
+def train_model(args, data, eval=True, verbose=True, device=torch.device('cpu'), return_epoch=False):
     if verbose:
         t0 = time.time()
         print(f'Start to train a {args.model} model...')
 
     model = create_model(args, data).to(device)
-    train(args, data, model, device, verbose)
+    num_epochs = train(args, data, model, device, verbose)
     model.load_state_dict(torch.load(os.path.join('./checkpoint', 'tmp',
                           f'{args.model}_{args.data}_{args.gpu}_best.pt')))
 
@@ -138,4 +139,7 @@ def train_model(args, data, eval=True, verbose=True, device=torch.device('cpu'))
     if verbose:
         print(f'{args.model} model training finished. Duration:', int(time.time() - t0))
 
-    return model
+    if return_epoch:
+        return model, num_epochs
+    else:
+        return model

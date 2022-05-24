@@ -134,13 +134,13 @@ def hessian_vector_product(model, edge_index, x, y, v, device, p_idx=None):
     grad_res = _autograd_grad(double_back, grad_jac, v, create_graph=False)
     hvp = _fill_in_zeros(grad_res, parameters, False, False, "double_back_trick")
     hvp = _grad_postprocess(hvp, False)
-    return hvp
+    return hvp, train_loss[0]
 
 
-def hessian(model, edge_index, x, y, p_idx=None):
-    parameters = [p for p in model.parameters() if p.requires_grad]
-    if p_idx is not None:
-        parameters = parameters[p_idx: p_idx + 1]
+def hessian(model, edge_index, x, y, parameters, lam=0.001):
+    # parameters = [p for p in model.parameters() if p.requires_grad]
+    # if p_idx is not None:
+    #     parameters = parameters[p_idx: p_idx + 1]
 
     y_hat = model(x, edge_index)
     train_loss = model.loss_sum(y_hat, y)
@@ -156,4 +156,4 @@ def hessian(model, edge_index, x, y, p_idx=None):
             jac_i.append(vj[0].detach().cpu())
         H.append(torch.stack(jac_i, dim=0).view(g.size() + p.size()).cpu())
 
-    return H
+    return H, [g.detach() for g in grads]

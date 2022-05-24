@@ -1,0 +1,3 @@
+,data,model,setting,linkteller
+0,citeseer,gcn,retrain,0.007180119294207543
+1,citeseer,gcn,unlearn,0.005353210157132708

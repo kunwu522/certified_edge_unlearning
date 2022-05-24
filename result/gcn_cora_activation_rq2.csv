@@ -1,0 +1,9 @@
+# layer,setting,Accuracy
+1,retrain,0.817343173
+1,unlearn,0.82103321
+2,retrain,0.826568266
+2,unlearn,0.828413284
+3,retrain,0.817343173
+3,unlearn,0.828413284
+4,retrain,0.824723247
+4,unlearn,0.776752768

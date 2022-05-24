@@ -1,0 +1,3 @@
+,data,model,setting,linkteller
+0,cora,gcn,retrain,0.020543360206764193
+1,cora,gcn,unlearn,0.021576699926052243

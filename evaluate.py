@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report
 from argument import get_args
 from data_loader import load_data
-from mia import MIA_accuracy
 from train import evaluate
 from retrain import retrain
 from hessian import hessian
@@ -126,53 +125,13 @@ def l2_distance(args, data):
     print('  ', result)
 
 
-def mia_attack(args, data, device):
-    num_edges_to_forget = args.edges[0]
-    # get edges that need to forget
-    edges_to_forget = sample_edges(args, data, args.method)[:num_edges_to_forget]
-    edges_ = [e for e in data['edges'] if e not in edges_to_forget]
-
-    member_edges = random.sample([e for e in data['edges'] if e not in edges_to_forget], int(0.5 * len(data['edges'])))
-    non_member_edges = []
-    while len(non_member_edges) < len(member_edges):
-        v1 = random.randint(0, data['num_nodes']-1)
-        v2 = random.randint(0, data['num_nodes']-1)
-        if v1 == v2:
-            continue
-        if (v1, v2) in data['edges']:
-            continue
-        non_member_edges.append((v1, v2))
-
-    mia_edges = member_edges + non_member_edges
-    mia_labels = [1] * len(member_edges) + [0] * len(non_member_edges)
-
-    # shuffle the edges
-    random_indices = list(range(len(mia_edges)))
-    random.shuffle(random_indices)
-    mia_edges = np.array(mia_edges)[random_indices]
-    mia_labels = np.array(mia_labels)[random_indices]
-
-    nodes = torch.tensor(data['nodes'], device=device)
-    edge_index = torch.tensor(data['edges'], device=device).t()
-    edge_index_prime = torch.tensor(edges_, device=device).t()
-    result = {'original': [], 'unlearn': [], 'retrain': []}
-    for _ in range(10):
-        for m in ['original', 'unlearn', 'retrain']:
-            model = load_model(args, data, type=m, edges=num_edges_to_forget).to(device)
-            model.eval()
-            with torch.no_grad():
-                if m == 'original':
-                    y_hat = model(nodes, edge_index)
-                else:
-                    y_hat = model(nodes, edge_index_prime)
-                posterior = F.softmax(y_hat, dim=1)
-            acc = MIA_accuracy(mia_edges, mia_labels,
-                               np.array(edges_to_forget), np.ones(len(edges_to_forget)
-                                                                  ) if m == 'original' else np.zeros(len(edges_to_forget)),
-                               data['features'], posterior.cpu().numpy())
-            result[m].append(acc)
-    for m, acc in result.items():
-        print(f'For {m}, the MIA accuracy is {np.mean(acc):.5f}.')
+def mia_attack(model, nodes, edge_index, mia_edges, mia_labels, test_edges, test_labels, features=None):
+    model.eval()
+    with torch.no_grad():
+        y_hat = model(nodes, edge_index)
+    posterior = F.softmax(y_hat, dim=1)
+    acc, TP, FN = MIA_accuracy(mia_edges, mia_labels, test_edges, test_labels, posterior.cpu().numpy(), features)
+    return acc, TP, FN
 
 
 def test_mia_with_diff_nodes(args, data, device):
@@ -283,16 +242,17 @@ def condition_number(args, data, device):
         if h.size(0) == 2708:
             # print('condition number:', np.linalg.cond(h.view(n, -1).cpu().numpy()))
             continue
-        E = torch.linalg.eigvalsh(h.view(n, -1))
+        E = torch.linalg.eigvals(h.view(n, -1))
         print('E', E)
-        plt.figure()
-        plt.plot(np.arange(len(E)), E.numpy())
-        plt.savefig(f'./eigenvalues_{args.model}_{args.data}_{idx}.png')
+        # plt.figure()
+        # plt.plot(np.arange(len(E)), E.numpy())
+        # plt.savefig(f'./eigenvalues_{args.model}_{args.data}_{idx}.png')
 
-        E = E[eigenvalue_threshold[args.model][idx]:]
+        # E = E[eigenvalue_threshold[args.model][idx]:]
         # print(E)
         print('condition number:', (torch.max(E) / torch.min(E)).item())
         print('max eigenvalue:', torch.max(E).item())
+        print('min eigenvalue:', torch.min(E).item())
         # t0 = time.time()
         # is_convex, max_eig_v = _is_PSD(h.view(n, -1))
         # print('  is convex:', is_convex)

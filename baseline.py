@@ -3,11 +3,9 @@
     @ Date: Mar 7th, 2022
 '''
 
-import os
-import random
 import argparse
 
-import numpy as np
+import pandas as pd
 import torch
 
 import graph_earser
@@ -45,10 +43,11 @@ if __name__ == '__main__':
 
     # Arugments for GraphEraser
     parser.add_argument('-epochs', dest='epochs', type=int, default=100)
-    parser.add_argument('-partition', type=str, default='blpa')
+    parser.add_argument('-partitions', type=str, nargs='+', default=['blpa', 'bekm'])
+    parser.add_argument('-aggr-methods', type=str, nargs='+', default=['majority', 'mean'])
     parser.add_argument('-k', dest='num_shards', type=int, default=20)
     parser.add_argument('-t', dest='max_t', type=int, default=10)
-    parser.add_argument('-aggr', type=str, default='majority')
+    # parser.add_argument('-aggr', type=str, default='majority')
 
     args = parser.parse_args()
     print('Parameters:', vars(args))
@@ -61,12 +60,29 @@ if __name__ == '__main__':
     data = load_data(args)
 
     if args.train:
-        if args.baseline == 'grapheraser':
-            graph_earser.train(args, data, device)
+        for num_edges in args.edges:
+            for partition in args.partitions:
+                args.partition = partition
+                for aggr in args.aggr_methods:
+                    args.aggr = aggr
+                    acc, f1 = graph_earser.train(args, data, device)
+                    print(f'Setting {partition}-{aggr}: {acc:.4f}, {f1:.4f}.')
 
     if args.unlearn:
         args.max_degree = False
+        edges = sample_edges(args, data, method=args.method)
+        d = {}
         for num_edges in args.edges:
-            edges_to_forget = sample_edges(args, data, method=args.method)[:num_edges]
-            print('The number of edges to be forgottn is:', len(edges_to_forget))
-            graph_earser.unlearn(args, data, edges_to_forget, device)
+            edges_to_forget = edges[:num_edges]
+            for partition in args.partitions:
+                args.partition = partition
+                for aggr in args.aggr_methods:
+                    args.aggr = aggr
+                    duration, acc, f1 = graph_earser.unlearn(args, data, edges_to_forget, device)
+                    d[f'{partition}-{aggr}-acc'] = acc
+                    d[f'{partition}-{aggr}-time'] = duration
+                    d[f'{partition}-{aggr}-f1'] = f1
+
+        df = pd.DataFrame(d, index=args.edges)
+        df.to_csv(f'./{args.model}_{args.data}_rq1_grapheraser.csv')
+        # print('The number of edges to be forgottn is:', len(edges_to_forget))
