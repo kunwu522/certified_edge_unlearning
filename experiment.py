@@ -1,9 +1,7 @@
 from collections import defaultdict
-from math import degrees
 import os
 import copy
 import random
-from sqlite3 import paramstyle
 import warnings
 from sklearn.manifold import TSNE
 import torch
@@ -837,7 +835,7 @@ def _rq3_fidelity(args, data, device):
 
     df = pd.DataFrame(data=result)
     print(df.groupby(['# edges', 'setting']).mean())
-    # df.to_csv(f'./result/rq3_fidelity_{args.data}_{args.model}.csv')
+    df.to_csv(f'./result/rq3_fidelity_{args.data}_{args.model}.csv')
 
 
 def _adversarial_setting(args, data, device):
@@ -1170,7 +1168,7 @@ def analyze_retrain_output(args, data, device):
 
 def analyze_influence(args, data, device):
     result = defaultdict(list)
-    for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
+    for _ in tqdm(range(2), desc=f'{args.data}-{args.model}'):
         original_model = train_model(args, data, eval=False, verbose=False, device=device)
         edges_to_forget = sample_edges(args, data, method='degree')
         for num_edges in args.edges:
@@ -1227,7 +1225,7 @@ def analyze_hessian(args, data, device):
     x_train = torch.tensor(data['train_set'].nodes, device=device)
     y_train = torch.tensor(data['train_set'].labels, device=device)
 
-    edges_to_forget = sample_edges(args, data, method='random')
+    edges_to_forget = sample_edges(args, data, method='degree')
     prediction = {}
     for num_edges in args.edges:
         edge_prime = remove_undirected_edges(data['edges'], edges_to_forget[:num_edges])
@@ -1253,9 +1251,11 @@ def analyze_hessian(args, data, device):
 
 
 damping = {
-    'cora': {'gcn': 1, 'gat': 10, 'sage': 1, 'gin': 1000},
-    'citeseer': {'gcn': 10, 'gat': 10, 'sage': 0.1, 'gin': 1000},
-    'polblogs': {'gcn': 1, 'gat': 10, 'sage': 0.1, 'gin': 1000},
+    'cora': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
+    'citeseer': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
+    'polblogs': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
+    'cs': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
+    'physics': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
 }
 
 
@@ -1263,6 +1263,8 @@ no_feature_damping = {
     'cora': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
     'citeseer': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
     'polblogs': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
+    'cs': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
+    'physics': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
 }
 
 if __name__ == '__main__':
@@ -1272,7 +1274,7 @@ if __name__ == '__main__':
     parser.add_argument('-mia', dest='mia_attack', action='store_true',
                         help='Indicator of evaluting the unlearning model via MIA attack (accuracy).')
     parser.add_argument('-cosine', dest='cosine', action='store_true')
-    parser.add_argument('-datasets', type=str, nargs='+', default=['cora', 'citeseer', 'polblogs'])
+    parser.add_argument('-datasets', type=str, nargs='+', default=['cora', 'citeseer'])
     parser.add_argument('-targets', type=str, nargs='+', default=['gcn', 'gat', 'sage', 'gin'])
     # parser.add_argument('-no-baseline', dest='baseline', action='store_false')
 

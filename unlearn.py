@@ -11,6 +11,7 @@ from torch.autograd import grad
 from tqdm import tqdm
 from train import test
 from scipy.optimize import fmin_ncg, fmin_l_bfgs_b, fmin_cg
+from torchmin import minimize
 from utils import create_model, edges_remove_nodes, load_model, remove_undirected_edges, sample_nodes, loss_of_test_nodes, save_model, train_set_remove_nodes
 from hessian import hessian_vector_product, hessian
 
@@ -214,6 +215,9 @@ def inverse_hvp_cg(data, model, edge_index, vs, damping, device, H=None):
                                        train_loader=train_loader, damping=damping,
                                        sizes=sizes, p_idx=i, device=device,
                                        H=h, p=p.data.detach())
+
+        # res = minimize(fmin_loss_fn, v.view(-1), method='cg', max_iter=100)
+
         res = fmin_cg(
             f=fmin_loss_fn,
             x0=to_vector(v),
@@ -226,7 +230,6 @@ def inverse_hvp_cg(data, model, edge_index, vs, damping, device, H=None):
             maxiter=100,
         )
         inverse_hvp.append(to_list(res[0], sizes, device)[0])
-        # print('-----------------------------------')
         status.append(res[4])
         cg_loss.append(res[1])
 
@@ -363,9 +366,9 @@ def _influence(args, data, model, parameters, edges_prime, device=torch.device('
     # return inverse_hvps
 
     # Directly approximate of H-1v
-    t0 = time.time()
+    # t0 = time.time()
     inverse_hvps, loss, status = inverse_hvp_cg(data, model, edge_index_prime, v, args.damping, device, H)
-    print(f'Finished CG in {(time.time() - t0):.2f}s.')
+    # print(f'Finished CG in {(time.time() - t0):.2f}s.')
 
     return inverse_hvps, loss, status
 

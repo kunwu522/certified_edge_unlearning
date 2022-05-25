@@ -45,7 +45,7 @@ def argument_parser():
     parser.add_argument('-verbose', action='store_true')
 
     # For training
-    parser.add_argument('-hidden', type=int, nargs='+', default=[16])
+    parser.add_argument('-hidden', type=int, nargs='+', default=[])
     parser.add_argument('-epochs', type=int, default=1000)
     parser.add_argument('-batch', type=int, default=512)
     parser.add_argument('-test-batch', type=int, default=1024)

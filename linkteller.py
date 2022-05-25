@@ -4,7 +4,6 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from sklearn.metrics import confusion_matrix, accuracy_score, roc_curve, precision_recall_curve, average_precision_score, auc
-from zmq import device
 
 
 def influence_matrix(nodes, edge_index, model, v, delta):

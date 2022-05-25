@@ -75,6 +75,22 @@ def load_pubmed(args):
     return nodes, edges, features, labels
 
 
+def load_cs(args):
+    dataset = Coauthor(root='./data/cs', name='CS')
+    data = dataset[0]
+
+    features = data.x.numpy() if args.feature else initialize_features(args.data, len(data.x), args.emb_dim)
+
+    nodes = list(range(len(data.x)))
+    labels = data.y.tolist()
+    edges = set()
+    for v1, v2 in data.edge_index.t().tolist():
+        edges.add((v1, v2))
+        edges.add((v2, v1))
+
+    return nodes, list(edges), features, labels
+
+
 def load_physics(args):
     dataset = Coauthor(root='./data/physics', name='Physics')
     data = dataset[0]
@@ -83,9 +99,11 @@ def load_physics(args):
 
     nodes = list(range(len(data.x)))
     labels = data.y.tolist()
-    edges = [(e[0], e[1]) for e in data.edge_index.t().tolist()]
-
-    return nodes, edges, features, labels
+    edges = set()
+    for v1, v2 in data.edge_index.t().tolist():
+        edges.add((v1, v2))
+        edges.add((v2, v1))
+    return nodes, list(edges), features, labels
 
 
 def _check_undirected(edges):
@@ -144,6 +162,8 @@ def load_data(args):
         nodes, edges, features, labels = load_citeseer(args)
     elif args.data == 'polblogs':
         nodes, edges, features, labels = load_polblogs(args)
+    elif args.data == 'cs':
+        nodes, edges, features, labels = load_cs(args)
     else:
         raise ValueError(f'Invalid dataset, {args.data}.')
 
