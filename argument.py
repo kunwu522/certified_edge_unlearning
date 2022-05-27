@@ -55,6 +55,7 @@ def argument_parser():
     parser.add_argument('-feature', dest='feature', action='store_true')
     parser.add_argument('-no-feature-update', dest='feature_update', action='store_false')
     parser.add_argument('-p', dest='patience', type=int, default=20)
+    parser.add_argument('-no-early-stop', dest='early_stop', action='store_false')
 
     # For unlearning
     parser.add_argument('-approx', type=str, default='cg')

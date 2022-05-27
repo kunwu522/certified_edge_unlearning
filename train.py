@@ -64,18 +64,19 @@ def train(args, data, model, device, verbose):
         if verbose:
             print(f'  Epoch {e}, training loss: {train_loss:.4f}, validation loss: {valid_loss:.4f}.')
 
-        if valid_loss < best_valid_loss:
-            best_valid_loss = valid_loss
-            trail_count = 0
-            best_epoch = e
-            torch.save(model.state_dict(), os.path.join('./checkpoint',
-                       'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
-        else:
-            trail_count += 1
-            if trail_count > patience and e >= 100:
-                if verbose:
-                    print(f'  Early Stop, the best Epoch is {best_epoch}, validation loss: {best_valid_loss:.4f}.')
-                break
+        if args.early_stop:
+            if valid_loss < best_valid_loss:
+                best_valid_loss = valid_loss
+                trail_count = 0
+                best_epoch = e
+                torch.save(model.state_dict(), os.path.join('./checkpoint',
+                                                            'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
+            else:
+                trail_count += 1
+                if trail_count > patience:
+                    if verbose:
+                        print(f'  Early Stop, the best Epoch is {best_epoch}, validation loss: {best_valid_loss:.4f}.')
+                    break
     return best_epoch
 
 

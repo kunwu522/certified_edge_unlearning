@@ -230,6 +230,7 @@ def inverse_hvp_cg(data, model, edge_index, vs, damping, device, H=None):
             maxiter=100,
         )
         inverse_hvp.append(to_list(res[0], sizes, device)[0])
+        # print('-----------------------------------')
         status.append(res[4])
         cg_loss.append(res[1])
 

@@ -1,8 +1,9 @@
+import time
 import os
 import copy
 import pickle
 import random
-from socket import AF_IPX
+from tqdm import tqdm
 from scipy.stats import entropy
 import torch
 from collections import defaultdict
@@ -88,11 +89,13 @@ def save_model(args, model, type='original', edges=None, edge=None, node=None):
 
 def sample_edges(args, data, method='random'):
     if method == 'random':
-        edges_to_forget = []
+        # _edges = random.sample(data['edges'], 4000)
+        edges_to_forget = set()
         for v1, v2 in data['edges']:
             if (v1, v2) in edges_to_forget or (v2, v1) in edges_to_forget:
                 continue
-            edges_to_forget.append((v1, v2))
+            edges_to_forget.add((v1, v2))
+        edges_to_forget = list(edges_to_forget)
         random.shuffle(edges_to_forget)
     elif method == 'degree':
         node_degree = defaultdict(int)
@@ -102,13 +105,12 @@ def sample_edges(args, data, method='random'):
         edge_degree = {(e[0], e[1]): node_degree[e[0]] + node_degree[e[1]] for e in data['edges']}
         sorted_edge_degree = {k: v for k, v in sorted(
             edge_degree.items(), key=lambda item: item[1], reverse=args.max_degree)}
-
-        edges_to_forget = []
+        edges_to_forget = set()
         for v1, v2 in sorted_edge_degree.keys():
             if (v2, v1) in edges_to_forget:
                 continue
-            assert (v1, v2) not in edges_to_forget, '!!!!!!'
-            edges_to_forget.append((v1, v2))
+            edges_to_forget.add((v1, v2))
+        edges_to_forget = list(edges_to_forget)
     elif method == 'loss_diff':
         edge2loss_diff = find_loss_difference(args, data['edges'])
         sorted_edge2loss_diff = {k: v for k, v in sorted(edge2loss_diff.items(), key=lambda x: abs(x[1]), reverse=True)}
@@ -196,13 +198,13 @@ def find_loss_difference_node(args, nodes_to_forget):
 
 
 def remove_undirected_edges(edges, edges_to_remove):
-    _edges = copy.deepcopy(edges)
+    _edges = set(copy.deepcopy(edges))
     for e in edges_to_remove:
         if e in _edges:
             _edges.remove(e)
         if (e[1], e[0]) in _edges:
             _edges.remove((e[1], e[0]))
-    return _edges
+    return list(_edges)
 
 
 def edges_remove_nodes(edges, nodes_to_remove):
