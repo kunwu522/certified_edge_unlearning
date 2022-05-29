@@ -60,6 +60,14 @@ aggr_method = {
     ('sage', 'physics', 'bekm'): 'mean',
     ('gin', 'physics', 'blpa'): 'mean',
     ('gin', 'physics', 'bekm'): 'mean',
+    ('gcn', 'cs', 'blpa'): 'mean',
+    ('gcn', 'cs', 'bekm'): 'mean',
+    ('gat', 'cs', 'blpa'): 'mean',
+    ('gat', 'cs', 'bekm'): 'mean',
+    ('sage', 'cs', 'blpa'): 'mean',
+    ('sage', 'cs', 'bekm'): 'mean',
+    ('gin', 'cs', 'blpa'): 'mean',
+    ('gin', 'cs', 'bekm'): 'mean',
 }
 
 
@@ -157,10 +165,14 @@ def _rq1_efficacy_jsd(args, data, device):
             with torch.no_grad():
                 unlearn_post = unlearn_model(nodes, edge_index_prime)
 
-            retrain_post = F.softmax(retrain_post, dim=1).cpu().numpy()
-            unlearn_post = F.softmax(unlearn_post, dim=1).cpu().numpy()
+            retrain_post = F.softmax(retrain_post, dim=1).cpu().numpy().astype(np.float64)
+            unlearn_post = F.softmax(unlearn_post, dim=1).cpu().numpy().astype(np.float64)
 
             _jsd = JSD(retrain_post, unlearn_post)
+            # print(np.sum(np.isinf(_jsd)))
+            # print(retrain_post[np.argwhere(np.isinf(_jsd)).reshape(-1)])
+            # print(unlearn_post[np.argwhere(np.isinf(_jsd)).reshape(-1)])
+
             if np.sum(_jsd < 0) > 0:
                 _jsd[_jsd < 0] = 0
             # jsd = np.mean(jsd[~np.isnan(jsd)])
@@ -482,7 +494,7 @@ def _rq2_fidelity(args, data, device):
 
     d = defaultdict(list)
     for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
-        for method in ['random', 'max-degree', 'min-degree', 'saliency']:
+        for method in ['random', 'max-degree', 'min-degree']:
             if method == 'max-degree':
                 args.max_degree = True
                 args.method = 'degree'
@@ -793,9 +805,54 @@ def _rq3_efficacy(args, data, device):
     mia_df.to_csv(os.path.join('./result', f'rq3_mia_{args.data}_{args.model}.csv'))
 
 
+def _rq3_degree(args, data, device):
+    args.edges = [200]
+    test_loader = DataLoader(data['train_set'], shuffle=False, batch_size=args.test_batch)
+    edge_index = torch.tensor(data['edges'], device=device).t()
+
+    result = defaultdict(list)
+    for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
+        original_model = train_model(args, data, eval=False, verbose=False, device=device)
+        original_res, _ = test(original_model, test_loader, edge_index, device=device)
+        for num_edges in args.edges:
+            # Adv
+            adv_model, adv_unlearn_model, A = adv_unlearn(args, data, num_edges, device)
+
+            # Benign
+            random_edges = []
+            while len(random_edges) < num_edges * 2:
+                v1 = random.randint(0, data['num_nodes'] - 1)
+                v2 = random.randint(0, data['num_nodes'] - 1)
+                if (v1, v2) in data['edges'] or (v2, v1) in data['edges']:
+                    continue
+                random_edges.append((v1, v2))
+                random_edges.append((v2, v1))
+
+            node_degree = defaultdict(int)
+            for edge in data['edges']:
+                node_degree[edge[0]] += 1
+                node_degree[edge[1]] += 1
+
+            adv_degree = [(node_degree[v1] + node_degree[v2]) / 2 for v1, v2 in A]
+            benign_degree = [(node_degree[v1] + node_degree[v2]) / 2 for v1, v2 in random_edges]
+
+            result['setting'].append('adv')
+            result['min degree'].append(np.min(adv_degree))
+            result['max degree'].append(np.max(adv_degree))
+            result['avg degree'].append(np.mean(adv_degree))
+
+            result['setting'].append('benign')
+            result['min degree'].append(np.min(benign_degree))
+            result['max degree'].append(np.max(benign_degree))
+            result['avg degree'].append(np.mean(benign_degree))
+
+    df = pd.DataFrame(result)
+    print(df.groupby('setting').mean())
+
+
 def _rq3_fidelity(args, data, device):
     args.edges = [100, 200, 400, 800, 1000]
-    test_loader = DataLoader(data['train_set'], shuffle=False, batch_size=args.test_batch)
+    test_loader = DataLoader(data['test_set'], shuffle=False, batch_size=args.test_batch)
     edge_index = torch.tensor(data['edges'], device=device).t()
 
     result = defaultdict(list)
@@ -1050,7 +1107,7 @@ def _evaluate_unlearn_time(args, data, device):
         df = pd.DataFrame(data=result)
 
     print(df.groupby(['# edges']).mean())
-    # df.to_csv(os.path.join('./result', f'rq1_efficiency_unlearn_{args.data}_{args.model}.csv'))
+    df.to_csv(os.path.join('./result', f'rq1_efficiency_unlearn_{args.data}_{args.model}_l1.csv'))
 
 
 def _evaluate_retraining_time(args, data, device):
@@ -1068,7 +1125,7 @@ def _evaluate_retraining_time(args, data, device):
         df = pd.DataFrame(data=result)
 
     print(df.groupby(['# edges']).mean())
-    df.to_csv(os.path.join('./result', f'rq1_efficiency_retrain_{args.data}_{args.model}.csv'))
+    df.to_csv(os.path.join('./result', f'rq1_efficiency_retrain_{args.data}_{args.model}_l1.csv'))
 
 
 def _evaluate_original_mdoel(args, data, device):
@@ -1260,11 +1317,11 @@ damping = {
 
 
 no_feature_damping = {
-    'cora': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-    'citeseer': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-    'polblogs': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-    'cs': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-    'physics': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
+    'cora': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
+    'citeseer': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
+    'polblogs': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
+    'cs': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
+    'physics': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
 }
 
 if __name__ == '__main__':
@@ -1275,7 +1332,7 @@ if __name__ == '__main__':
                         help='Indicator of evaluting the unlearning model via MIA attack (accuracy).')
     parser.add_argument('-cosine', dest='cosine', action='store_true')
     parser.add_argument('-datasets', type=str, nargs='+', default=['cora', 'citeseer'])
-    parser.add_argument('-targets', type=str, nargs='+', default=['gcn', 'gat', 'sage', 'gin'])
+    parser.add_argument('-targets', type=str, nargs='+', default=['gcn', 'sage', 'gin'])
     # parser.add_argument('-no-baseline', dest='baseline', action='store_false')
 
     args = parser.parse_args()
@@ -1305,21 +1362,23 @@ if __name__ == '__main__':
             if args.rq == 'original':
                 _evaluate_original_mdoel(args, data, device)
             if args.rq == 'rq1_efficiency':
-                # _evaluate_retraining_time(args, data, device)
-                _evaluate_unlearn_time(args, data, device)
+                _evaluate_retraining_time(args, data, device)
+                # _evaluate_unlearn_time(args, data, device)
             if args.rq == 'rq1_mia':
                 _rq1_efficacy_mia(args, data, device)
             if args.rq == 'rq1_jsd':
                 _rq1_efficacy_jsd(args, data, device)
 
             if args.rq == 'rq2_efficiency':
-                _rq2_efficiency_retrain(args, data, device)
+                # _rq2_efficiency_retrain(args, data, device)
                 _rq2_efficiency_unlearn(args, data, device)
 
             if args.rq == 'rq2_fidelity':
                 _rq2_fidelity(args, data, device)
+
             if args.rq == 'rq2_mia':
                 _rq2_efficacy_mia(args, data, device)
+
             if args.rq == 'rq2_jsd':
                 _rq2_efficacy_jsd(args, data, device)
 
@@ -1328,6 +1387,9 @@ if __name__ == '__main__':
 
             if args.rq == 'rq3_efficacy':
                 _rq3_efficacy(args, data, device)
+
+            if args.rq == 'rq3_degree':
+                _rq3_degree(args, data, device)
 
             if args.rq == 'rq4_efficiency':
                 _rq4_efficiency(args, data, device)
