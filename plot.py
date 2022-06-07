@@ -42,8 +42,8 @@ def _approximation_evaluate(args):
     ax = sns.scatterplot(data=df, x='retrain_loss', y='unlearn_loss', s=80)
     ax.set_xlabel('Loss (retrain)')
     ax.set_ylabel('Loss (unlearn)')
-    # plt.xlim([0.4, 0.75])
-    # plt.ylim([0.45, 0.65])
+    # plt.xlim([0.1, 0.2])
+    # plt.ylim([0.15, 0.2])
     # plt.legend()
     plt.subplots_adjust(left=0.17, bottom=0.14)
     plt.savefig(os.path.join('./plot', f'loss_{args.data}_{args.model}.pdf'), bbox_inches='tight')
@@ -79,22 +79,75 @@ def RQ4_adversarial_vs_benign(args):
     plt.show()
 
 
+def _rq2_efficiency(args):
+    unlearn_df = pd.read_csv(os.path.join('./result', f'rq2_efficiency_unlearn_{args.data}_{args.model}.csv'))
+    unlearn_df = unlearn_df[~unlearn_df['method'].str.startswith('saliency')]
+    unlearn_df['method'] = unlearn_df['method'].str.replace('random', 'EraEdge(Rand)')
+    unlearn_df['method'] = unlearn_df['method'].str.replace('max-degree', 'EraEdge(MaxD)')
+    unlearn_df['method'] = unlearn_df['method'].str.replace('min-degree', 'EraEdge(MinD)')
+
+    retrain_df = pd.read_csv(os.path.join('./result', f'rq2_efficiency_retrain_{args.data}_{args.model}.csv'))
+    retrain_df = retrain_df[~retrain_df['method'].str.startswith('saliency')]
+    retrain_df['method'] = retrain_df['method'].str.replace('random', 'Retrain(Rand)')
+    retrain_df['method'] = retrain_df['method'].str.replace('max-degree', 'Retrain(MaxD)')
+    retrain_df['method'] = retrain_df['method'].str.replace('min-degree', 'Retrain(MinD)')
+
+    df = pd.concat((retrain_df, unlearn_df), axis=0, ignore_index=True)
+
+    sns.set_theme(style='darkgrid')
+    plt.figure(figsize=(8, 6))
+    plt.rc('axes', labelsize=20)
+    plt.rc('xtick', labelsize=20)
+    plt.rc('ytick', labelsize=20)
+    plt.rc('legend', fontsize=16)
+    plt.rc('font', size=20)
+    c = sns.color_palette()
+    ax = sns.barplot(data=df, x='# edges', y='running time', hue='method',
+                     hue_order=['Retrain(Rand)', 'EraEdge(Rand)', 'Retrain(MaxD)', 'EraEdge(MaxD)', 'Retrain(MinD)', 'EraEdge(MinD)'])
+    labels = ax.get_legend_handles_labels()
+
+    ax.set_xlabel('Number of unlearned edges')
+    ax.set_ylabel('Unlearning time (seconds)')
+    # ax.set_xticklabels([f'{int(x / dataset_num_edges[args.data] * 100)}%' for x in df['# edges'].unique()])
+    # ax.set_xticks([100, 200, 400, 800, 1000])
+    plt.legend([], [], frameon=False)
+    plt.subplots_adjust(bottom=0.15)
+    plt.savefig(os.path.join('./plot/', f'rq2_efficiency_{args.data}_{args.model}.pdf'), bbox_inches='tight')
+    plt.show()
+
+    fig_legend, ax_legend = plt.subplots(figsize=(10, 1))
+    # ax.legend
+    ax_legend.axis(False)
+    ax_legend.legend(*labels, loc='center', ncol=3)
+    fig_legend.savefig(os.path.join('./plot', f'rq2_effiency_legend.pdf'), bbox_inches='tight')
+
+
 def rq1_efficiency(args):
     unlearn_df = pd.read_csv(os.path.join('./result', f'rq1_efficiency_unlearn_{args.data}_{args.model}.csv'))
-    retrain_df = pd.read_csv(os.path.join('./result', f'rq1_efficiency_retrain_{args.data}_{args.model}.csv'))
-    baseline_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_baseline_{args.data}_{m}.csv'))
-    baseline_df = baseline_df[_baseline_df['# edges'].isin([100, 200, 400, 800, 1000])]
-    for m in ['gcn', 'gat', 'sage', 'gin']:
-        _baseline_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_baseline_{args.data}_{m}.csv'))
-        _baseline_df = _baseline_df[_baseline_df['# edges'].isin([100, 200, 400, 800, 1000])]
-        _baseline_df = [f'{p}({m})' for p in _baseline_df['partition'].values]
-        baseline_df.append(_baseline_df)
-    baseline_df = pd.concat(baseline_df, ignore_index=True)
+    retrain_df = pd.read_csv(os.path.join('./result', f'rq1_efficiency_retrain_{args.data}_{args.model}_l1.csv'))
+    if args.data == 'cs' or args.data == 'physics':
+        baseline_df = pd.read_csv(os.path.join('./result', f'rq1_baseline_efficiency_{args.data}_{args.model}.csv'))
+        print(baseline_df)
+        # baseline_df = pd.DataFrame(np.repeat(_df.values, 5, axis=0))
+        # baseline_df.columns = _df.columns
+        # baseline_df['# edges'] = [100, 200, 400, 800, 1000] * 20
+    else:
+        baseline_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_baseline_{args.data}_{args.model}.csv'))
+        baseline_df = baseline_df[baseline_df['# edges'] != 0]
+    # baseline_df = baseline_df[_baseline_df['# edges'].isin([100, 200, 400, 800, 1000])]
+    # for m in ['gcn', 'gat', 'sage', 'gin']:
+    #     _baseline_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_baseline_{args.data}_{m}.csv'))
+    #     _baseline_df = _baseline_df[_baseline_df['# edges'].isin([100, 200, 400, 800, 1000])]
+    #     _baseline_df = [f'{p}({m})' for p in _baseline_df['partition'].values]
+    #     baseline_df.append(_baseline_df)
+    # baseline_df = pd.concat(baseline_df, ignore_index=True)
 
     df = pd.DataFrame()
-    df['# edges'] = pd.concat((baseline_df['# edges'], unlearn_df['# edges'], retrain_df['# edges']), ignore_index=True)
-    df['running time'] = pd.concat((baseline_df['running time'], unlearn_df['running time']), ignore_index=True)
-    df['setting'] = baseline_df['partition'].str.upper().values.tolist(), unlearn_df['setting'].values.tolist()
+    df['# edges'] = pd.concat((baseline_df['# edges'], retrain_df['# edges'], retrain_df['# edges']), ignore_index=True)
+    df['running time'] = pd.concat((baseline_df['running time'] / baseline_df['# shards'], retrain_df['running time'],
+                                   unlearn_df['running time']), ignore_index=True)
+    df['setting'] = baseline_df['partition'].str.upper().values.tolist() + ['Retrain'] * \
+        retrain_df.shape[0] + ['EraEdge'] * unlearn_df.shape[0]
 
     sns.set_theme(style='darkgrid')
     plt.figure(figsize=(10, 6))
@@ -105,10 +158,10 @@ def rq1_efficiency(args):
     plt.rc('font', size=20)
     c = sns.color_palette()
     # ax = sns.lineplot(data=df, x='# edges', y='running time', hue='setting',
-    #                   style='setting', markers=False, linewidth=2.5, markersize=13, ci=None,
-    #                   palette=[c[0], c[0], c[1], c[1], c[2], c[2], c[3], c[3]],
-    #                   dashes=['', (5, 2), '', (5, 2), '', (5, 2), '', (5, 2)])
-    ax = sns.barplot(data=df, x='# edges', y='running time', hue='setting')
+    #                   style='setting', markers=False, linewidth=2.5,
+    #                   palette=[c[0], 'black', c[2], c[3]])
+    ax = sns.barplot(data=df, x='# edges', y='running time', hue='setting',
+                     palette=[c[0], 'black', c[2], c[3]])
     labels = ax.get_legend_handles_labels()
     print(labels)
 
@@ -118,7 +171,7 @@ def rq1_efficiency(args):
     # ax.set_xticks([100, 200, 400, 800, 1000])
     plt.legend([], [], frameon=False)
     plt.subplots_adjust(bottom=0.15)
-    plt.savefig(os.path.join('./plot/', f'rq1_efficiency_{args.data}.pdf'), bbox_inches='tight')
+    plt.savefig(os.path.join('./plot/', f'rq1_efficiency_{args.data}_{args.model}.pdf'), bbox_inches='tight')
     plt.show()
 
     fig_legend, ax_legend = plt.subplots(figsize=(10, 1))
@@ -164,31 +217,33 @@ def RQ4_adversarial_edges_unlearn(args):
 def _rq2_fidelity(args):
     df = pd.read_csv(os.path.join('./result', f'rq2_fidelity_{args.data}_{args.model}.csv'))
     df = df[~df.setting.str.endswith('O')]
+    df = df[~df.setting.str.startswith('saliency')]
+    df['# edges'] = df['# edges'].values.astype(str)
     sns.set_theme(style='darkgrid')
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 6))
     plt.rc('axes', labelsize=20)
-    plt.rc('xtick', labelsize=16)
-    plt.rc('ytick', labelsize=16)
+    plt.rc('xtick', labelsize=20)
+    plt.rc('ytick', labelsize=20)
     plt.rc('legend', fontsize=16)
     plt.rc('font', size=20)
 
     c = sns.color_palette('Paired', 8)
     ax = sns.lineplot(x='# edges', y='accuracy', data=df, hue='setting',
                       linewidth=2.5, style='setting',
-                      dashes=['', (4, 2), '', (4, 2), '', (4, 2), '', (4, 2)],
-                      palette=[c[1], c[1], c[3], c[3], c[5], c[5], 'black', 'black'],
+                      dashes=['', (4, 2), '', (4, 2), '', (4, 2)],
+                      palette=[c[1], c[1], c[3], c[3], c[5], c[5]],
                       markersize=13, ci=None)
     labels = plt.gca().get_legend_handles_labels()
 
     # ax.set_xticklabels(list(range(200, 2200, 200)))
     # ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-    ax.set_xticks([100, 200, 400, 800, 1000])
+    # ax.set_xticks([100, 200, 400, 800, 1000])
     # ax.set_ylim([0.83, 0.88])
     # plt.xticklabels([f'{int(x/dataset_num_edges[args.data] * 100)}%' for x in df['# edges']])
     plt.xlabel('Number of unlearned edge')
     plt.ylabel('Model accuracy')
     plt.legend([], [], frameon=False)
-    plt.subplots_adjust(bottom=0.15)
+    plt.subplots_adjust(bottom=0.15, left=0.15)
 
     figure_filename = f'rq2_fidelity_{args.data}_{args.model}.pdf'
     plt.savefig(os.path.join('./plot', figure_filename), bbox_inches='tight')
@@ -198,12 +253,12 @@ def _rq2_fidelity(args):
     # ax.legend
     ax_legend.axis(False)
     legend_names = [
-        'Retrain(Rand@K)', 'ERAEDGE(Rand@K)',
-        'Retrain(MaxDegree@K)', 'ERAEDGE(MaxDegree@K)',
-        'Retrain(MinDegree@K)', 'ERAEDGE(MinDegree@K)',
-        'Retrain(Saliency@K)', 'ERAEDGE(Saliency@K)',
+        'Retrain(Rand)', 'ERAEDGE(Rand)',
+        'Retrain(MaxD)', 'EraEdge(MaxD)',
+        'Retrain(MinD)', 'EraEdge(MinD)',
+        # 'Retrain(Saliency@K)', 'ERAEDGE(Saliency@K)',
     ]
-    ax_legend.legend(labels[0], legend_names, loc='center', ncol=4)
+    ax_legend.legend(labels[0], legend_names, loc='center', ncol=3)
 
     fig_legend.savefig(os.path.join('./plot', f'rq2_edge_sampling_legend.pdf'), bbox_inches='tight')
 
@@ -487,6 +542,7 @@ def RQ1_running_time(args):
 
 def _rq3_jsd(args):
     df = pd.read_csv(f'./result/rq3_jsd_{args.data}_{args.model}.csv')
+    df['# edges'] = df['# edges'].values.astype(str)
 
     sns.set_style('darkgrid')
     plt.figure(figsize=(10, 6))
@@ -516,16 +572,16 @@ def _rq3_jsd(args):
 
 
 def _rq2_jsd(args):
-    df = []
-    for m in ['gcn', 'gat']:
-        _df = pd.read_csv(os.path.join('./result', f'rq2_jsd_{args.data}_{m}.csv'))
-        _df['method'] = [f'Random@K({m.upper()})', f'MaxDegree@K({m.upper()})',
-                         f'MinDegree@K({m.upper()})', f'Saliency@K({m.upper()})'] * 50
-        df.append(_df)
-    df = pd.concat(df, axis=0, ignore_index=True)
+    # df = []
+    # for m in ['gcn']:
+    df = pd.read_csv(os.path.join('./result', f'rq2_jsd_{args.data}_{args.model}.csv'))
+    df['method'] = [f'Rand', f'MaxD', f'MinD'] * 50
+    #  f'MinDegree@K({m.upper()})', f'Saliency@K({m.upper()})'] * 50
+    # df.append(_df)
+    # df = pd.concat(df, axis=0, ignore_index=True)
 
     sns.set_style('darkgrid')
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 6))
     plt.rc('axes', labelsize=20)
     plt.rc('xtick', labelsize=18)
     plt.rc('ytick', labelsize=18)
@@ -534,7 +590,7 @@ def _rq2_jsd(args):
     c = sns.color_palette()
     ax = sns.lineplot(data=df, x='# edges', y='jsd', hue='method',
                       style='method', markers=False, linewidth=2.5, markersize=13, ci=None,
-                      palette=c[:4] * 2, dashes=[''] * 4 + [(4, 2)] * 4)
+                      palette=c[:3], dashes=[''] * 3)
 
     labels = ax.get_legend_handles_labels()
 
@@ -544,78 +600,83 @@ def _rq2_jsd(args):
     # ax.set_xticklabels(list(range(200, 2200, 200)))
     ax.set_xticks([100, 200, 300, 400, 500])
     # ax.set_ylim(0, 0.1)
+    plt.subplots_adjust(left=0.17, bottom=0.14)
     plt.legend([], [], frameon=False)
-    plt.savefig(os.path.join('./plot/', f'rq2_jsd_{args.data}.pdf'), bbox_inches='tight')
+    plt.savefig(os.path.join('./plot/', f'rq2_jsd_{args.data}_{args.model}.pdf'), bbox_inches='tight')
     plt.show()
 
     fig_legend, ax_legend = plt.subplots(figsize=(10, 1))
     ax_legend.axis(False)
     ax_legend.legend(
-        [labels[0][0], labels[0][4], labels[0][1], labels[0][5], labels[0][2], labels[0][6], labels[0][3], labels[0][7]],
-        [labels[1][0], labels[1][4], labels[1][1], labels[1][5], labels[1][2], labels[1][6], labels[1][3], labels[1][7]],
-        loc='center', ncol=4)
+        *labels,
+        # [labels[0][0], labels[0][4], labels[0][1], labels[0][5], labels[0][2], labels[0][6], labels[0][3], labels[0][7]],
+        # [labels[1][0], labels[1][4], labels[1][1], labels[1][5], labels[1][2], labels[1][6], labels[1][3], labels[1][7]],
+        loc='center', ncol=3)
     fig_legend.savefig(os.path.join('plot', 'rq2_jsd_legend.pdf'), bbox_inches='tight')
 
 
 def _rq1_efficacy_jsd(args):
     df_list = []
-    for m in ['gcn', 'gat', 'sage', 'gin']:
-        df = pd.read_csv(os.path.join(f'./result/appr_posterior_{args.data}_{m}.csv'))
-    #     # df = pd.read_csv(os.path.join('./result', f'rq1_efficacy_jsd_{args.data}_{m}.csv'))
+    for m in ['gcn', 'sage', 'gin']:
+        # df = pd.read_csv(os.path.join(f'./result/appr_posterior_{args.data}_{m}.csv'))
+        df = pd.read_csv(os.path.join('./result', f'rq1_efficacy_jsd_{args.data}_{m}.csv'))
         df = df[df['# edges'].isin([100, 200, 400, 800, 1000])]
+        df['# edges'] = df['# edges'].values.astype(str)
         df['target'] = np.array([m] * df.shape[0])
         df_list.append(df)
     df = pd.concat(df_list, ignore_index=True)
-    # print(df.head())
+    print(df)
 
     sns.set_style('darkgrid')
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 6))
     plt.rc('axes', labelsize=20)
-    plt.rc('xtick', labelsize=18)
-    plt.rc('ytick', labelsize=18)
+    plt.rc('xtick', labelsize=20)
+    plt.rc('ytick', labelsize=20)
     plt.rc('legend', fontsize=16)
     plt.rc('font', size=20)
     c = sns.color_palette()
     ax = sns.lineplot(data=df, x='# edges', y='JSD', hue='target',
                       style='target', markers=True, linewidth=2.5, markersize=13, ci=None,
-                      palette=[c[0], 'black', c[2], c[3]])
+                      palette=[c[0], c[2], c[3]])
 
     labels = ax.get_legend_handles_labels()
 
     # ax.set_ylabel
     ax.set_xlabel('Number of unlearned edges')
-    ax.set_xticks([100, 200, 400, 800, 1000])
+    # ax.set_xticks([1, 2, 3, 4, 5])
+    # ax.set_xticklabels(['100', '200', '400', '800', '1000'])
     # ax.set_xticklabels([f'{int(x / dataset_num_edges[args.data] * 100)}%' for x in df['# edges'].unique()])
-    # ax.set_ylim(0, 0.1)
+    # ax.set_ylim(0.01, 0.08)
     plt.legend([], [], frameon=False)
     plt.savefig(os.path.join('./plot/', f'posterior_{args.data}.pdf'), bbox_inches='tight')
     plt.show()
 
     fig_legend, ax_legend = plt.subplots(figsize=(10, 1))
     ax_legend.axis(False)
-    ax_legend.legend(labels[0], ['GCN', 'GAT', 'GraphSAGE', 'GIN'], loc='center', ncol=4)
+    ax_legend.legend(labels[0], ['GCN', 'GraphSAGE', 'GIN'], loc='center', ncol=4)
     fig_legend.savefig(os.path.join('plot', 'posterior_legend.pdf'), bbox_inches='tight')
 
 
 def rq1_fidelity(args):
-    if args.feature:
-        unlearn_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_{args.data}_{args.model}.csv'))
-        baseline_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_baseline_{args.data}_{args.model}.csv'))
-    else:
-        unlearn_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_{args.data}_{args.model}_no-feature.csv'))
-        baseline_df = pd.read_csv(os.path.join(
-            './result', f'rq1_fidelity_baseline_{args.data}_{args.model}_no-feature.csv'))
+    # if args.feature:
+    #     unlearn_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_{args.data}_{args.model}.csv'))
+    #     baseline_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_baseline_{args.data}_{args.model}.csv'))
+    # else:
+    unlearn_df = pd.read_csv(os.path.join('./result', f'rq1_fidelity_{args.data}_{args.model}_no-feature.csv'))
+    baseline_df = pd.read_csv(os.path.join(
+        './result', f'rq1_fidelity_baseline_{args.data}_{args.model}_no-feature.csv'))
 
-    df = pd.DataFrame({
-        '# edges': unlearn_df['# edges'],
-        'Setting': unlearn_df['setting'],
-        'Model accuracy': unlearn_df['accuracy'],
-    })
     # df = pd.DataFrame({
-    #     '# edges': baseline_df['# edges'].append(unlearn_df['# edges'], ignore_index=True),
-    #     'Setting': baseline_df['partition'].str.upper().append(unlearn_df['setting'], ignore_index=True),
-    #     'Model accuracy': baseline_df['accuracy'].append(unlearn_df['accuracy'], ignore_index=True),
+    #     '# edges': unlearn_df['# edges'],
+    #     'Setting': unlearn_df['setting'],
+    #     'Model accuracy': unlearn_df['accuracy'],
     # })
+    df = pd.DataFrame({
+        '# edges': baseline_df['# edges'].append(unlearn_df['# edges'], ignore_index=True),
+        'Setting': baseline_df['partition'].str.upper().append(unlearn_df['setting'], ignore_index=True),
+        'Model accuracy': baseline_df['accuracy'].append(unlearn_df['accuracy'], ignore_index=True),
+    })
+    df['# edges'] = df['# edges'].values.astype(str)
 
     print(df)
 
@@ -629,13 +690,13 @@ def rq1_fidelity(args):
     c = sns.color_palette()
     ax = sns.lineplot(data=df, x='# edges', y='Model accuracy', hue='Setting',
                       style='Setting', markers=True, linewidth=2.5, markersize=13, ci=None,
-                      palette=[c[2], c[3]])
+                      palette=[c[0], 'black', c[2], c[3]])
 
     labels = ax.get_legend_handles_labels()
 
     ax.set_xlabel('Number of unlearned edges')
-    ax.set_ylabel('Model fidelity')
-    ax.set_xticks([0, 100, 200, 400, 800, 1000])
+    ax.set_ylabel('Model accuracy')
+    # ax.set_xticks([0, 100, 200, 400, 800, 1000])
     # ax.set_xticklabels([f'{int(x / dataset_num_edges[args.data] * 100)}%' for x in df['# edges'].unique()])
     # ax.set_xticks(list(range(0, 2200, 200)))
     plt.legend([], [], frameon=False)
@@ -645,7 +706,7 @@ def rq1_fidelity(args):
 
     fig_legend, ax_legend = plt.subplots(figsize=(10, 1))
     ax_legend.axis(False)
-    ax_legend.legend(labels[0], ['BLPA', 'BEKM', 'Retrain', 'ERAEDGE'], loc='center', ncol=5)
+    ax_legend.legend(labels[0], ['BLPA', 'BEKM', 'Retrain', 'EraEdge'], loc='center', ncol=5)
     fig_legend.savefig(os.path.join('./plot', f'rq1_fidelity_legend.pdf'), bbox_inches='tight')
 
 
@@ -796,6 +857,9 @@ if __name__ == '__main__':
 
     if args.rq == 'rq2_fidelity':
         _rq2_fidelity(args)
+
+    if args.rq == 'rq2_efficiency':
+        _rq2_efficiency(args)
 
     if args.rq == 'rq2_jsd':
         _rq2_jsd(args)

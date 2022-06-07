@@ -58,6 +58,11 @@ def adversarial_adjacency_mat(args, data, device, n_perturbations=500):
     return A
 
 
+def adversarial_edges(args, data, device, n_perturbations):
+    A = adversarial_adjacency_mat(args, data, device, n_perturbations)
+    return [(v1, v2) for v1, v2 in A]
+
+
 def adv_unlearn(args, data, num_edges, device):
     A = adversarial_adjacency_mat(args, data, device, n_perturbations=int(num_edges))
     print()

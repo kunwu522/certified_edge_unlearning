@@ -10,9 +10,9 @@ class GNN(nn.Module):
     def __init__(self, num_nodes, embedding_size, hidden_sizes, num_classes, weights, feature_update, model, dropout=0.5):
 
         super(GNN, self).__init__()
+        self.feature_update = feature_update
 
         self.embedding = nn.Embedding(num_nodes, embedding_dim=embedding_size)
-        # self.embedding.weight.requires_grad = False
         self.embedding.weight = nn.Parameter(torch.from_numpy(weights).float(), requires_grad=feature_update)
 
         def gnn_layer(model, input_size, out_size, dropout):
@@ -23,7 +23,7 @@ class GNN(nn.Module):
             elif model == 'sage':
                 gnn = SAGEConv(input_size, out_size, bias=True)
             elif model == 'gin':
-                mlp = MLP([input_size, out_size], batch_norm=True)
+                mlp = MLP([input_size, out_size], dropout=0.5, batch_norm=True)
                 # mlp = nn.Sequential(
                 #     nn.Linear(input_size, int(input_size)),
                 #     nn.ReLU(),
@@ -72,6 +72,12 @@ class GNN(nn.Module):
 
     def embeddings(self, nodes=None):
         return self.embedding.weight if nodes is None else self.embedding(nodes)
+
+    def reset_parameters(self, weights):
+        for gnn in self.gnns:
+            gnn.reset_parameters()
+        if self.feature_update:
+            self.embedding.weight = nn.Parameter(torch.from_numpy(weights).float(), requires_grad=self.feature_update)
 
 
 # class GCN(nn.Module):

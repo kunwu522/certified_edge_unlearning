@@ -12,7 +12,10 @@ from sklearn.model_selection import train_test_split
 
 
 def initialize_features(dataset, num_nodes, emb_dim):
-    features_path = os.path.join('./data', dataset, 'features.pt')
+    if emb_dim == 32:
+        features_path = os.path.join('./data', dataset, 'features.pt')
+    else:
+        features_path = os.path.join('./data', dataset, f'features_{emb_dim}.pt')
     if os.path.exists(features_path):
         features = torch.load(features_path)
     else:

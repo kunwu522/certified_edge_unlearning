@@ -77,6 +77,10 @@ def train(args, data, model, device, verbose):
                     if verbose:
                         print(f'  Early Stop, the best Epoch is {best_epoch}, validation loss: {best_valid_loss:.4f}.')
                     break
+        else:
+            torch.save(model.state_dict(), os.path.join('./checkpoint',
+                                                        'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
+
     return best_epoch
 
 

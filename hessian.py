@@ -154,6 +154,6 @@ def hessian(model, edge_index, x, y, parameters, lam=0.001):
             vj = _autograd_grad((g.reshape(-1)[j], ), p, retain_graph=True, create_graph=False)
             assert len(vj) == 1
             jac_i.append(vj[0].detach().cpu())
-        H.append(torch.stack(jac_i, dim=0).view(g.size() + p.size()).cpu())
+        H.append(torch.stack(jac_i, dim=0).view(g.size() + p.size()))
 
     return H, [g.detach() for g in grads]

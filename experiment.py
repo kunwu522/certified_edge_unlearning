@@ -1,6 +1,8 @@
 from collections import defaultdict
+from email.policy import default
 import os
 import copy
+from platform import node
 import random
 import warnings
 from sklearn.manifold import TSNE
@@ -13,7 +15,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import seaborn as sns
-from adversarial_attack import adv_retrain_unlearn, adv_unlearn, adversaracy_setting
+from adversarial_attack import adv_retrain_unlearn, adv_unlearn, adversaracy_setting, adversarial_edges
 from argument import argument_parser
 import graph_earser
 from data_loader import load_data
@@ -141,10 +143,7 @@ def rq0_effectiveness(args, data, device):
 
 
 def _rq1_efficacy_jsd(args, data, device):
-    # args.edges = [100, 200, 400, 800, 1000]
-
     original_model = train_model(args, data, eval=False, verbose=False, device=device)
-
     nodes = torch.tensor(data['nodes'], device=device)
 
     result = defaultdict(list)
@@ -168,7 +167,17 @@ def _rq1_efficacy_jsd(args, data, device):
             retrain_post = F.softmax(retrain_post, dim=1).cpu().numpy().astype(np.float64)
             unlearn_post = F.softmax(unlearn_post, dim=1).cpu().numpy().astype(np.float64)
 
+            # indices = random.sample(list(range(len(retrain_post))), 5)
+            # print('Retrain posterior:', retrain_post[indices])
+            # print('Unlearn posterior:', unlearn_post[indices])
+
             _jsd = JSD(retrain_post, unlearn_post)
+
+            print('JSD:', _jsd.mean())
+            # print('Retrain prediction:', np.argmax(retrain_post[indices], axis=1))
+            # print('Unlearn prediction:', np.argmax(unlearn_post[indices], axis=1))
+
+            # exit(0)
             # print(np.sum(np.isinf(_jsd)))
             # print(retrain_post[np.argwhere(np.isinf(_jsd)).reshape(-1)])
             # print(unlearn_post[np.argwhere(np.isinf(_jsd)).reshape(-1)])
@@ -210,7 +219,7 @@ def _approximation_evaluate(args, data, device):
     df.to_csv(os.path.join('./result', f'appr_loss_{args.data}_{args.model}.csv'))
 
 
-def _rq1_fidelity(args, data, device):
+def _rq1_accuracy(args, data, device):
     result = defaultdict(list)
     test_loader = DataLoader(data['test_set'], batch_size=args.test_batch, shuffle=False)
     edge_index = torch.tensor(data['edges'], device=device).t()
@@ -422,20 +431,20 @@ def _gnn_settings(args, data, device):
         'RI': [[16], [24, 12], [24, 16, 8], [24, 16, 16, 8], [24, 16, 16, 16, 8]],
         'NF': [[16], [24, 12], [24, 16, 8], [24, 16, 16, 8], [24, 16, 16, 16, 8]]
     }
-    damping = {
-        'RI': {
-            'gcn': [10, 100, 100, 100, 100],
-            'gat': [100, 1000, 1000, 1000, 1000],
-            'sage': [100, 1000, 1000, 1000, 1000],
-            'gin': [100, 1000, 100, 1000, 1000],
-        },
-        'NF': {
-            'gcn': [10, 100, 100, 100, 100],
-            'gat': [100, 1000, 1000, 1000, 1000],
-            'sage': [100, 1000, 1000, 1000, 1000],
-            'gin': [100, 1000, 1000, 1000, 1000],
-        },
-    }
+    # damping = {
+    #     'RI': {
+    #         'gcn': [10, 100, 100, 100, 100],
+    #         'gat': [100, 1000, 1000, 1000, 1000],
+    #         'sage': [100, 1000, 1000, 1000, 1000],
+    #         'gin': [100, 1000, 100, 1000, 1000],
+    #     },
+    #     'NF': {
+    #         'gcn': [10, 100, 100, 100, 100],
+    #         'gat': [100, 1000, 1000, 1000, 1000],
+    #         'sage': [100, 1000, 1000, 1000, 1000],
+    #         'gin': [100, 1000, 1000, 1000, 1000],
+    #     },
+    # }
 
     num_edges = 500
     max_num_layers = len(hiddens['RI']) + 1
@@ -446,7 +455,7 @@ def _gnn_settings(args, data, device):
     for _ in tqdm(range(10), desc=f'RQ2({args.data}, {args.model})'):
         edges_to_forget = sample_edges(args, data, method=args.method)[:num_edges]
         for i in range(max_num_layers - 1):
-            for setting in ['RI', 'NF']:
+            for setting in ['RI']:
                 args.hidden = hiddens[setting][i]
                 args.feature = setting == 'NF'
                 args.no_feature_update = setting == 'RI'
@@ -454,10 +463,10 @@ def _gnn_settings(args, data, device):
                 # train a original model
                 original_model = train_model(args, data, eval=False, verbose=False, device=device)
                 # retrain
-                retrain_model, _ = retrain(args, data, edges_to_forget, device)
+                retrain_model, retrain_time = retrain(args, data, edges_to_forget, device)
                 # unlearn
-                args.damping = damping[setting][args.model][i]
-                unlearn_model, _ = unlearn(args, data, original_model, edges_to_forget, device=device)
+                # args.damping = damping[setting][args.model][i]
+                unlearn_model, unlearn_time = unlearn(args, data, original_model, edges_to_forget, device=device)
 
                 # evaluate
                 _edges = remove_undirected_edges(data['edges'], edges_to_forget)
@@ -470,22 +479,25 @@ def _gnn_settings(args, data, device):
 
                 d['# Layer'].append(i+1)
                 d['Setting'].append(setting + '-original')
+                d['running time'].append('0')
                 d['Accuracy'].append(res['accuracy'])
 
                 d['# Layer'].append(i+1)
                 d['Setting'].append(setting + '-retrain')
+                d['running time'].append(retrain_time)
                 d['Accuracy'].append(retrain_res['accuracy'])
 
                 d['# Layer'].append(i+1)
                 d['Setting'].append(setting + '-ours')
+                d['running time'].append(unlearn_time)
                 d['Accuracy'].append(unlearn_res['accuracy'])
                 # print(f'Original model: Accuracy({res["accuracy"]:.4f}), F1({res["macro avg"]["f1-score"]:.4f}).')
 
     df = pd.DataFrame(d)
-    df.to_csv(os.path.join('./result', f'rq2_{args.data}_{args.model}_l{max_num_layers}.csv'))
+    df.to_csv(os.path.join('./result', f'rq4_{args.data}_{args.model}.csv'))
 
 
-def _rq2_fidelity(args, data, device):
+def _rq2_accuracy(args, data, device):
     args.edges = [100, 200, 400, 800, 1000]
 
     # train a original model
@@ -535,7 +547,7 @@ def _rq2_efficiency_unlearn(args, data, device):
 
     result = defaultdict(list)
     for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
-        for method in ['random', 'max-degree', 'min-degree', 'saliency']:
+        for method in ['random', 'max-degree', 'min-degree']:
             if method == 'max-degree':
                 args.max_degree = True
                 args.method = 'degree'
@@ -554,7 +566,7 @@ def _rq2_efficiency_unlearn(args, data, device):
                 result['method'].append(method)
     df = pd.DataFrame(data=result)
     print(df.groupby(['# edges', 'method']).mean())
-    df.to_csv(os.path.join('./result', 'rq2_efficiency_unlearn.csv'))
+    df.to_csv(os.path.join('./result', f'rq2_efficiency_unlearn_{args.data}_{args.model}.csv'))
 
 
 def _rq2_efficiency_retrain(args, data, device):
@@ -562,7 +574,7 @@ def _rq2_efficiency_retrain(args, data, device):
 
     result = defaultdict(list)
     for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
-        for method in ['random', 'max-degree', 'min-degree', 'saliency']:
+        for method in ['random', 'max-degree', 'min-degree']:
             if method == 'max-degree':
                 args.max_degree = True
                 args.method = 'degree'
@@ -580,7 +592,7 @@ def _rq2_efficiency_retrain(args, data, device):
                 result['method'].append(method)
     df = pd.DataFrame(data=result)
     print(df.groupby(['# edges', 'method']).mean())
-    df.to_csv(os.path.join('./result', 'rq2_efficiency_retrain.csv'))
+    df.to_csv(os.path.join('./result', f'rq2_efficiency_retrain_{args.data}_{args.model}.csv'))
 
 
 def _rq2_efficacy_mia(args, data, device):
@@ -589,7 +601,7 @@ def _rq2_efficacy_mia(args, data, device):
 
     mia_result = defaultdict(list)
     for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
-        for method in ['random', 'max-degree', 'min-degree', 'saliency']:
+        for method in ['random', 'max-degree', 'min-degree']:
             if method == 'max-degree':
                 args.max_degree = True
                 args.method = 'degree'
@@ -633,7 +645,7 @@ def _rq2_efficacy_jsd(args, data, device):
 
     jsd_result = defaultdict(list)
     for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
-        for method in ['random', 'max-degree', 'min-degree', 'saliency']:
+        for method in ['random', 'max-degree', 'min-degree']:
             if method == 'max-degree':
                 args.max_degree = True
                 args.method = 'degree'
@@ -657,8 +669,8 @@ def _rq2_efficacy_jsd(args, data, device):
                 unlearn_model.eval()
                 with torch.no_grad():
                     unlearn_post = unlearn_model(nodes, edge_index_prime)
-                retrain_post = F.softmax(retrain_post, dim=1).cpu().numpy()
-                unlearn_post = F.softmax(unlearn_post, dim=1).cpu().numpy()
+                retrain_post = F.softmax(retrain_post, dim=1).cpu().numpy().astype(np.float64)
+                unlearn_post = F.softmax(unlearn_post, dim=1).cpu().numpy().astype(np.float64)
 
                 _jsd = JSD(retrain_post, unlearn_post)
                 if np.sum(_jsd < 0) > 0:
@@ -726,6 +738,67 @@ def analyze_running_time():
     print('Min', np.min(times))
 
 
+def _rq3_mia(args, data, device):
+    nodes = torch.tensor(data['nodes'], device=device)
+    edge_index = torch.tensor(data['edges'], device=device).t()
+
+    result = defaultdict(list)
+    for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
+        for num_edges in args.edges:
+            adv_edges = adversarial_edges(args, data, device, n_perturbations=int(num_edges))
+            benign_edges = sample_edges(args, data, method='random')[:num_edges]
+            edges_prime = remove_undirected_edges(data['edges'], benign_edges)
+
+            edges_with_adv = data['edges'] + adv_edges
+            edges_with_adv_index = torch.tensor(edges_with_adv, device=device).t()
+
+            _data = copy.deepcopy(data)
+            _data['edges'] = edges_with_adv
+            adv_model = train_model(args, data, eval=False, verbose=False, device=device)
+            adv_unlearn_model, _ = unlearn(args, data, adv_model, adv_edges, device)
+            benign_unlearn_model, _ = unlearn(args, data, adv_model, benign_edges, device)
+
+            neg_edges = []
+            while len(neg_edges) < num_edges * 2:
+                v1 = random.randint(0, data['num_nodes'] - 1)
+                v2 = random.randint(0, data['num_nodes'] - 1)
+                if (v1, v2) in edges_with_adv or (v2, v1) in edges_with_adv:
+                    continue
+                neg_edges.append((v1, v2))
+                neg_edges.append((v2, v1))
+
+            _, pl_o_adv, _ = linkteller_attack('original', nodes, data['features'], edges_with_adv_index, adv_model,
+                                               adv_edges, neg_edges, device=device)
+            _, pl_o_benign, _ = linkteller_attack('original', nodes, data['features'], edges_with_adv_index, adv_model,
+                                                  benign_edges, neg_edges, device=device)
+
+            random_edges = random.sample(edges_prime, num_edges)
+            _, _, pl_u_adv = linkteller_attack('unlearn', nodes, data['features'], edge_index, adv_unlearn_model,
+                                               random_edges, adv_edges, device=device)
+            _, _, pl_u_benign = linkteller_attack('unlearn', nodes, data['features'], edge_index, benign_unlearn_model,
+                                                  random_edges, benign_edges, device=device)
+
+            result['# edges'].append(num_edges)
+            result['setting'].append('adv_original')
+            result['privacy leakage'].append(pl_o_adv)
+
+            result['# edges'].append(num_edges)
+            result['setting'].append('benign_original')
+            result['privacy leakage'].append(pl_o_benign)
+
+            result['# edges'].append(num_edges)
+            result['setting'].append('adv_unlearn')
+            result['privacy leakage'].append(pl_u_adv)
+
+            result['# edges'].append(num_edges)
+            result['setting'].append('benign_unlearn')
+            result['privacy leakage'].append(pl_u_benign)
+
+    df = pd.DataFrame(result)
+    print(df.groupby(['# edges', 'setting']).mean())
+    df.to_csv(f'rq3_mia_{args.data}_{args.model}.csv')
+
+
 def _rq3_efficacy(args, data, device):
     args.edges = [100, 200, 400, 800, 1000]
     test_loader = DataLoader(data['train_set'], shuffle=False, batch_size=args.test_batch)
@@ -746,8 +819,8 @@ def _rq3_efficacy(args, data, device):
                 with torch.no_grad():
                     unlearn_post = unlearn_model(nodes, edge_index_prime)
 
-                retrain_post = F.softmax(retrain_post, dim=1).cpu().numpy()
-                unlearn_post = F.softmax(unlearn_post, dim=1).cpu().numpy()
+                retrain_post = F.softmax(retrain_post, dim=1).cpu().numpy().astype(np.float64)
+                unlearn_post = F.softmax(unlearn_post, dim=1).cpu().numpy().astype(np.float64)
 
                 _jsd = JSD(retrain_post, unlearn_post)
                 if np.sum(_jsd < 0) > 0:
@@ -807,44 +880,36 @@ def _rq3_efficacy(args, data, device):
 
 def _rq3_degree(args, data, device):
     args.edges = [200]
-    test_loader = DataLoader(data['train_set'], shuffle=False, batch_size=args.test_batch)
-    edge_index = torch.tensor(data['edges'], device=device).t()
+    node2label = {idx: label for idx, label in enumerate(data['labels'])}
 
     result = defaultdict(list)
     for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
-        original_model = train_model(args, data, eval=False, verbose=False, device=device)
-        original_res, _ = test(original_model, test_loader, edge_index, device=device)
         for num_edges in args.edges:
             # Adv
-            adv_model, adv_unlearn_model, A = adv_unlearn(args, data, num_edges, device)
-
-            # Benign
-            random_edges = []
-            while len(random_edges) < num_edges * 2:
-                v1 = random.randint(0, data['num_nodes'] - 1)
-                v2 = random.randint(0, data['num_nodes'] - 1)
-                if (v1, v2) in data['edges'] or (v2, v1) in data['edges']:
-                    continue
-                random_edges.append((v1, v2))
-                random_edges.append((v2, v1))
+            adv_edges = adversarial_edges(args, data, device, num_edges)
+            benign_edges = sample_edges(args, data, method='random')[:num_edges]
 
             node_degree = defaultdict(int)
             for edge in data['edges']:
                 node_degree[edge[0]] += 1
                 node_degree[edge[1]] += 1
 
-            adv_degree = [(node_degree[v1] + node_degree[v2]) / 2 for v1, v2 in A]
-            benign_degree = [(node_degree[v1] + node_degree[v2]) / 2 for v1, v2 in random_edges]
+            adv_same_class_count = np.sum([node2label[v1] == node2label[v2] for v1, v2 in adv_edges])
+            adv_degree = [(node_degree[v1] + node_degree[v2]) / 2 for v1, v2 in adv_edges]
+            benign_same_class_count = np.sum([node2label[v1] == node2label[v2] for v1, v2 in benign_edges])
+            benign_degree = [(node_degree[v1] + node_degree[v2]) / 2 for v1, v2 in benign_edges]
 
             result['setting'].append('adv')
             result['min degree'].append(np.min(adv_degree))
             result['max degree'].append(np.max(adv_degree))
             result['avg degree'].append(np.mean(adv_degree))
+            result['same class rate'].append(adv_same_class_count / num_edges)
 
             result['setting'].append('benign')
             result['min degree'].append(np.min(benign_degree))
             result['max degree'].append(np.max(benign_degree))
             result['avg degree'].append(np.mean(benign_degree))
+            result['same class rate'].append(benign_same_class_count / num_edges)
 
     df = pd.DataFrame(result)
     print(df.groupby('setting').mean())
@@ -961,6 +1026,92 @@ def cosine_similarity(a, b):
     return np.dot(a, b) / (p1 * p2)
 
 
+def _rq1_baseline_efficiency(args, data, device):
+    result = defaultdict(list)
+
+    for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
+        for partition in ['blpa', 'bekm']:
+            args.partition = partition
+            args.aggr = aggr_method[(args.model, args.data, partition)]
+
+            for num_edges in tqdm(args.edges, desc=f'{args.partition}'):
+                base_time, num_samples = graph_earser.train(args, data, device)
+                result['# edges'].append(num_edges)
+                result['partition'].append(partition)
+                result['running time'].append(base_time)
+                result['# shards'].append(num_samples)
+
+    df = pd.DataFrame(result)
+    print(df.groupby('partition').mean())
+    df.to_csv(f'./result/rq1_baseline_efficiency_{args.data}_{args.model}.csv')
+
+
+def _rq3_benign(args, data, device):
+    test_loader = DataLoader(data['test_set'], batch_size=args.test_batch, shuffle=False)
+    nodes = torch.tensor(data['test_set'].nodes, device=device)
+
+    result = defaultdict(list)
+    for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
+        original_model = train_model(args, data, eval=False, verbose=False, device=device)
+        edge_index = torch.tensor(data['edges'], device=device).t()
+        original_res, _ = test(original_model, test_loader, edge_index, device)
+
+        edges_to_forget = sample_edges(args, data, method='random')
+        for num_edges in args.edges:
+
+            retrain_model, retrain_time = retrain(args, data, edges_to_forget[:num_edges], device)
+            unlearn_model, unlearn_time = unlearn(args, data, original_model, edges_to_forget[:num_edges], device)
+
+            edges_prime = remove_undirected_edges(data['edges'], edges_to_forget[:num_edges])
+            edge_index_prime = torch.tensor(edges_prime, device=device).t()
+            retrain_res, _ = test(retrain_model, test_loader, edge_index_prime, device)
+            unlearn_res, _ = test(unlearn_model, test_loader, edge_index_prime, device)
+
+            def _efficacy(retrain_model, unlearn_model, edge_index_prime):
+                retrain_model.eval()
+                with torch.no_grad():
+                    retrain_post = retrain_model(nodes, edge_index_prime)
+                unlearn_model.eval()
+                with torch.no_grad():
+                    unlearn_post = unlearn_model(nodes, edge_index_prime)
+
+                retrain_post = F.softmax(retrain_post, dim=1).cpu().numpy()
+                unlearn_post = F.softmax(unlearn_post, dim=1).cpu().numpy()
+
+                _jsd = JSD(retrain_post, unlearn_post)
+                if np.sum(_jsd < 0) > 0:
+                    _jsd[_jsd < 0] = 0
+                return np.mean(_jsd)
+
+            jsd = _efficacy(retrain_model, unlearn_model, edge_index_prime)
+            o_pl, r_pl, u_pl = _mia_attack(data, original_model, retrain_model,
+                                           unlearn_model, edges_to_forget[:num_edges], device)
+            # Original
+            result['# edges'].append(0)
+            result['setting'].append('original')
+            result['accuracy'].append(original_res['accuracy'])
+            result['jsd'].append(0)
+            result['privacy leakage'].append(o_pl)
+            result['running time'].append(0)
+            # Retrain
+            result['# edges'].append(num_edges)
+            result['setting'].append('Retrain')
+            result['accuracy'].append(retrain_res['accuracy'])
+            result['jsd'].append(jsd)
+            result['privacy leakage'].append(r_pl)
+            result['running time'].append(retrain_time)
+            # Unlearn
+            result['# edges'].append(num_edges)
+            result['setting'].append('EraEdge')
+            result['accuracy'].append(unlearn_res['accuracy'])
+            result['jsd'].append(jsd)
+            result['privacy leakage'].append(u_pl)
+            result['running time'].append(unlearn_time)
+
+    df = pd.DataFrame(result)
+    df.to_csv(f'./result/rq3_benign_{args.data}_{args.model}.csv')
+
+
 def _baseline(args, data, device):
 
     result = defaultdict(list)
@@ -975,7 +1126,7 @@ def _baseline(args, data, device):
             result['running time'].append(base_time)
             result['accuracy'].append(acc)
             result['f1'].append(f1)
-            result['# shards'].append(20)
+            result['# shards'].append(args.num_shards)
 
         edges_to_forget = sample_edges(args, data, method='random')
         # 2. retrain
@@ -1107,12 +1258,15 @@ def _evaluate_unlearn_time(args, data, device):
         df = pd.DataFrame(data=result)
 
     print(df.groupby(['# edges']).mean())
-    df.to_csv(os.path.join('./result', f'rq1_efficiency_unlearn_{args.data}_{args.model}_l1.csv'))
+    df.to_csv(os.path.join('./result', f'rq1_efficiency_unlearn_{args.data}_{args.model}.csv'))
 
 
 def _evaluate_retraining_time(args, data, device):
     args.edges = [100, 200, 400, 800, 1000]
     result = defaultdict(list)
+
+    args.epochs = 100
+    args.early_stop = False
     for _ in tqdm(range(10), desc=f'{args.data}-{args.model}'):
         edges_to_forget = sample_edges(args, data, method='random')
 
@@ -1125,10 +1279,12 @@ def _evaluate_retraining_time(args, data, device):
         df = pd.DataFrame(data=result)
 
     print(df.groupby(['# edges']).mean())
-    df.to_csv(os.path.join('./result', f'rq1_efficiency_retrain_{args.data}_{args.model}_l1.csv'))
+    df.to_csv(os.path.join('./result', f'rq1_efficiency_retrain_{args.data}_{args.model}.csv'))
 
 
-def _evaluate_original_mdoel(args, data, device):
+def _evaluate_original_model(args, data, device):
+    ''' The experiment for Table 7 in the paper
+    '''
     test_loader = DataLoader(data['test_set'], shuffle=False, batch_size=args.test_batch)
     edge_index = torch.tensor(data['edges'], device=device).t()
 
@@ -1189,6 +1345,28 @@ def analyze_edges(args):
 
     df = pd.DataFrame(result)
     print(df)
+
+
+def analyze_degree(args, data):
+    node_degree = defaultdict(int)
+    for edge in data['edges']:
+        node_degree[edge[0]] += 1
+        node_degree[edge[1]] += 1
+
+    edge_degrees = {}
+    for v1, v2 in data['edges']:
+        degree = (node_degree[v1] + node_degree[v2]) / 2
+        if (v1, v2) in edge_degrees or (v2, v1) in edge_degrees:
+            continue
+        edge_degrees[(v1, v2)] = degree
+
+    degrees = list(edge_degrees.values())
+    print(f'{args.data} -- Min Max Avg:', np.min(degrees), np.max(degrees), np.mean(degrees))
+
+    sorted_edge_degrees = {k: v for k, v in sorted(edge_degrees.items(), key=lambda x: x[1])}
+    # print('Top 200 edges:', list(sorted_edge_degrees.keys())[:80])
+    # print('Top 200 degree:', list(sorted_edge_degrees.values())[:200])
+    print(np.unique(list(sorted_edge_degrees.values())[:400], return_counts=True))
 
 
 def analyze_retrain_output(args, data, device):
@@ -1276,6 +1454,12 @@ def analyze_unlearn_output(args, data, device):
     print(df.groupby(['# edges', 'dataset', 'target']).mean())
 
 
+def analyze_parameters(args, data, device):
+    model = train_model(args, data, eval=False, verbose=False, device=device)
+    for i, p in enumerate(model.parameters()):
+        print(f'Parameter {i}:', p.size())
+
+
 def analyze_hessian(args, data, device):
     model = train_model(args, data, eval=False, verbose=False, device=device)
 
@@ -1288,8 +1472,10 @@ def analyze_hessian(args, data, device):
         edge_prime = remove_undirected_edges(data['edges'], edges_to_forget[:num_edges])
         edge_index_prime = torch.tensor(edge_prime, device=device).t()
         # y_hat = model(x_train, edge_index_prime)
+
         H, _ = hessian(model, edge_index_prime, x_train, y_train, [p for p in model.parameters()])
         for idx, h in enumerate(H):
+            h = h.to(device)
             print('  H:', h.size())
             if h.dim() == 4:
                 n = h.size(0) * h.size(1)
@@ -1300,29 +1486,17 @@ def analyze_hessian(args, data, device):
             if h.size(0) == 2708:
                 # print('condition number:', np.linalg.cond(h.view(n, -1).cpu().numpy()))
                 continue
-            E = torch.linalg.eigvals(h.view(n, -1)).real
-            print('E', E.tolist())
-            print('condition number:', (torch.max(E) / torch.min(E)).item())
-            print('max eigenvalue:', torch.max(E).item())
-            print('min eigenvalue:', torch.min(E).item())
+            # E = torch.linalg.eigvals(h.view(n, -1)).real
+            r = torch.matrix_rank(h.view(n, -1))
+            print(f'{args.data}-{args.model}: ', r, n)
 
+            h = h.cpu()
+            torch.cuda.empty_cache()
+            # print('E', E.tolist())
+            # print('condition number:', (torch.max(E) / torch.min(E)).item())
+            # print('max eigenvalue:', torch.max(E).item())
+            # print('min eigenvalue:', torch.min(E).item())
 
-damping = {
-    'cora': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-    'citeseer': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-    'polblogs': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-    'cs': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-    'physics': {'gcn': 0, 'gat': 0, 'sage': 0, 'gin': 0},
-}
-
-
-no_feature_damping = {
-    'cora': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
-    'citeseer': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
-    'polblogs': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
-    'cs': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
-    'physics': {'gcn': 0, 'gat': 0.01, 'sage': 0, 'gin': 0},
-}
 
 if __name__ == '__main__':
     parser = argument_parser()
@@ -1333,15 +1507,9 @@ if __name__ == '__main__':
     parser.add_argument('-cosine', dest='cosine', action='store_true')
     parser.add_argument('-datasets', type=str, nargs='+', default=['cora', 'citeseer'])
     parser.add_argument('-targets', type=str, nargs='+', default=['gcn', 'sage', 'gin'])
-    # parser.add_argument('-no-baseline', dest='baseline', action='store_false')
 
     args = parser.parse_args()
     print('Parameters:', vars(args))
-
-    # random.seed(args.seed)
-    # np.random.seed(args.seed)
-    # torch.manual_seed(args.seed)
-
     device = torch.device(f'cuda:{args.gpu}') if torch.cuda.is_available() and args.gpu >= 0 else torch.device('cpu')
 
     for d in args.datasets:
@@ -1349,55 +1517,47 @@ if __name__ == '__main__':
         data = load_data(args)
         for target in args.targets:
             args.model = target
-            if args.feature:
-                args.damping = damping[d][target]
-            else:
-                args.damping = no_feature_damping[d][target]
-
-            if args.rq == 'rq1_fidelity':
-                _rq1_fidelity(args, data, device)
+            if args.rq == 'rq1_accuracy':
+                _rq1_accuracy(args, data, device)
             if args.rq == 'rq1_baseline':
                 _baseline(args, data, device)
-
             if args.rq == 'original':
-                _evaluate_original_mdoel(args, data, device)
+                _evaluate_original_model(args, data, device)
             if args.rq == 'rq1_efficiency':
                 _evaluate_retraining_time(args, data, device)
-                # _evaluate_unlearn_time(args, data, device)
+                _evaluate_unlearn_time(args, data, device)
             if args.rq == 'rq1_mia':
                 _rq1_efficacy_mia(args, data, device)
             if args.rq == 'rq1_jsd':
                 _rq1_efficacy_jsd(args, data, device)
-
+            # if args.rq == 'rq1_baseline_efficiency':
+            #     _rq1_baseline_efficiency(args, data, device)
             if args.rq == 'rq2_efficiency':
-                # _rq2_efficiency_retrain(args, data, device)
+                _rq2_efficiency_retrain(args, data, device)
                 _rq2_efficiency_unlearn(args, data, device)
-
-            if args.rq == 'rq2_fidelity':
-                _rq2_fidelity(args, data, device)
-
+            if args.rq == 'rq2_accuracy':
+                _rq2_accuracy(args, data, device)
             if args.rq == 'rq2_mia':
                 _rq2_efficacy_mia(args, data, device)
-
             if args.rq == 'rq2_jsd':
                 _rq2_efficacy_jsd(args, data, device)
-
             if args.rq == 'rq3_fidelity':
                 _rq3_fidelity(args, data, device)
-
             if args.rq == 'rq3_efficacy':
                 _rq3_efficacy(args, data, device)
-
             if args.rq == 'rq3_degree':
                 _rq3_degree(args, data, device)
+            if args.rq == 'rq3_mia':
+                _rq3_mia(args, data, device)
+            # if args.rq == 'rq3_benign':
+            #     _rq3_benign(args, data, device)
+            # if args.rq == 'rq4_efficiency':
+            #     _rq4_efficiency(args, data, device)
 
-            if args.rq == 'rq4_efficiency':
-                _rq4_efficiency(args, data, device)
-
-            elif args.rq == 'gnn_setting':
-                _gnn_settings(args, data, device)
-            elif args.rq == 'adv':
-                _adversarial_setting(args, data, device)
+            # elif args.rq == 'rq4':
+            #     _gnn_settings(args, data, device)
+            # elif args.rq == 'adv':
+            #     _adversarial_setting(args, data, device)
             elif args.rq == 'loss':
                 _approximation_evaluate(args, data, device)
             elif args.rq == 'comparison':
@@ -1408,11 +1568,6 @@ if __name__ == '__main__':
         data = load_data(args)
         for target in args.targets:
             args.model = target
-            if args.feature:
-                args.damping = damping[d][target]
-            else:
-                args.damping = no_feature_damping[d][target]
-
             if args.analysis == 'time':
                 analyze_running_time()
             if args.analysis == 'utility':
@@ -1427,6 +1582,13 @@ if __name__ == '__main__':
 
             if args.analysis == 'hessian':
                 analyze_hessian(args, data, device)
+
+            if args.analysis == 'degree':
+                analyze_degree(args, data)
+
+            if args.analysis == 'parameters':
+                analyze_parameters(args, data, device)
+
     # if args.analysis == 'original':
     #     analyze_original()
 

@@ -142,4 +142,4 @@ class Attacker:
         tpr = tp / (tp + fn)
         tnr = tn / (tn + fp)
 
-        return acc, tpr, tnr
+        return acc, tpr, 1 - tnr

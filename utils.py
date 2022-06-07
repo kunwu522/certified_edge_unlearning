@@ -116,7 +116,7 @@ def sample_edges(args, data, method='random'):
         sorted_edge2loss_diff = {k: v for k, v in sorted(edge2loss_diff.items(), key=lambda x: abs(x[1]), reverse=True)}
         edges_to_forget = list(sorted_edge2loss_diff.keys())
     elif method == 'saliency':
-        saliency_edges_path = os.path.join('./data', args.data, f'sorted_saliency_edges_{args.model}.list')
+        saliency_edges_path = os.path.join('./data', args.data, f'sorted_saliency_edges_gcn.list')
         with open(saliency_edges_path, 'rb') as fp:
             edges_to_forget = pickle.load(fp)
     elif method == 'same_class':
@@ -200,6 +200,8 @@ def find_loss_difference_node(args, nodes_to_forget):
 def remove_undirected_edges(edges, edges_to_remove):
     _edges = set(copy.deepcopy(edges))
     for e in edges_to_remove:
+        if not isinstance(e, tuple):
+            e = tuple(e)
         if e in _edges:
             _edges.remove(e)
         if (e[1], e[0]) in _edges:

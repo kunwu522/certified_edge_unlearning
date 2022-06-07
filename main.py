@@ -54,6 +54,8 @@ if __name__ == '__main__':
     device = torch.device(f'cuda:{args.gpu}') if torch.cuda.is_available() and args.gpu >= 0 else torch.device('cpu')
 
     if args.train:
+        # args.early_stop = False
+        # args.epochs = 100
         model = train_model(args, data, device=device)
         if args.save:
             save_model(args, model, 'original')
