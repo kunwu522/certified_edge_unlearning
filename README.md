@@ -1,5 +1,5 @@
 # Graph Edge Unlearning via Influence Analysis
-This is an implementation of paper [Graph Edge Unlearning via Influence Analysis](). We provide the code of graph edge unlearning. In addition, we present the code for reproducing the experiments.
+This is an implementation of paper [Certified Edge Unlearning for Graph Neural Networks](). We provide the code of graph edge unlearning. In addition, we present the code for reproducing the experiments.
 
 ## Dependencies
 * tqdm/numpy/pandas/sklearn/matplotlib/seaborn
