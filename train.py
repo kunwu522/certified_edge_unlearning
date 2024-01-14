@@ -10,9 +10,14 @@ from sklearn.metrics import classification_report
 
 
 def train(args, data, model, device, verbose):
-    train_loader = DataLoader(data['train_set'], batch_size=args.batch, shuffle=True)
-    valid_loader = DataLoader(data['valid_set'], batch_size=args.test_batch)
-    edge_index = torch.tensor(data['edges'], device=device).t()
+    train_loader = DataLoader(data.train_set, batch_size=args.batch, shuffle=True)
+    valid_loader = DataLoader(data.valid_set, batch_size=args.test_batch)
+    if args.transductive_edge:
+        train_edge_index = torch.tensor(data.edges, device=device).t()
+        valid_edge_index = torch.tensor(data.edges, device=device).t()
+    else:
+        train_edge_index = torch.tensor(data.train_edges, device=device).t()
+        valid_edge_index = torch.tensor(data.valid_edges, device=device).t()
 
     num_epochs = args.epochs
     lr = args.lr
@@ -24,21 +29,20 @@ def train(args, data, model, device, verbose):
     best_valid_loss = 999999.
     best_epoch = 0
     trail_count = 0
+    best_model_state = model.state_dict()
 
     for e in range(1, num_epochs + 1):
-
         train_losses = []
-
         model.train()
         iterator = tqdm(train_loader, f'  Epoch {e}') if verbose else train_loader
         for nodes, labels in iterator:
             model.zero_grad()
-
             nodes = nodes.to(device)
             labels = labels.to(device)
 
-            y_hat = model(nodes, edge_index)
+            y_hat = model(nodes, train_edge_index)
             loss = model.loss(y_hat, labels)
+
             loss.backward()
             optimizer.step()
 
@@ -54,9 +58,8 @@ def train(args, data, model, device, verbose):
                 nodes = nodes.to(device)
                 labels = labels.to(device)
 
-                y_hat = model(nodes, edge_index)
+                y_hat = model(nodes, valid_edge_index)
                 loss = model.loss(y_hat, labels)
-
                 valid_losses.append(loss.cpu().item())
 
         valid_loss = np.mean(valid_losses)
@@ -69,8 +72,9 @@ def train(args, data, model, device, verbose):
                 best_valid_loss = valid_loss
                 trail_count = 0
                 best_epoch = e
-                torch.save(model.state_dict(), os.path.join('./checkpoint',
-                                                            'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
+                # torch.save(model.state_dict(), os.path.join('./checkpoint',
+                #                                             'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
+                best_model_state = model.state_dict()
             else:
                 trail_count += 1
                 if trail_count > patience:
@@ -78,52 +82,111 @@ def train(args, data, model, device, verbose):
                         print(f'  Early Stop, the best Epoch is {best_epoch}, validation loss: {best_valid_loss:.4f}.')
                     break
         else:
-            torch.save(model.state_dict(), os.path.join('./checkpoint',
-                                                        'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
+            # torch.save(model.state_dict(), os.path.join('./checkpoint',
+            #                                             'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
+            best_model_state = model.state_dict()
 
-    return best_epoch
+    return best_model_state, best_epoch
+
+
+def prediction(args, data, model, device):
+    test_loader = DataLoader(data.test_set, batch_size=args.test_batch, shuffle=False)
+    edge_index = torch.tensor(data.edges, device=device).t()
+    # train_loader = DataLoader(data.train_set, batch_size=args.test_batch, shuffle=False)
+    # edge_index = torch.tensor(data.train_edges, device=device).t()
+
+    y_preds = []
+    model.eval()
+    with torch.no_grad():
+        for nodes, _ in test_loader:
+            nodes = nodes.to(device)
+            y_hat = model(nodes, edge_index)
+            y_pred = torch.argmax(y_hat, dim=1)
+            y_preds.append(y_pred.cpu().numpy())
+
+    return np.concatenate(y_preds, axis=0)
 
 
 def evaluate(args, data, model, device):
-    test_loader = DataLoader(data['test_set'], batch_size=args.test_batch, shuffle=False)
-    edge_index = torch.tensor(data['edges'], device=device).t()
+    train_loader = DataLoader(data.train_set, batch_size=args.batch, shuffle=False)
+    valid_loader = DataLoader(data.valid_set, batch_size=args.test_batch, shuffle=False)
+    test_loader = DataLoader(data.test_set, batch_size=args.test_batch, shuffle=False)
+    if args.transductive_edge:
+        train_edge_index = torch.tensor(data.edges, device=device).t()
+        valid_edge_index = torch.tensor(data.edges, device=device).t()
+    else:
+        train_edge_index = torch.tensor(data.train_edges, device=device).t()
+        valid_edge_index = torch.tensor(data.valid_edges, device=device).t()
+    # train_edge_index = torch.tensor(data.edges, device=device).t()
+    # valid_edge_index = torch.tensor(data.edges, device=device).t()
+    edge_index = torch.tensor(data.edges, device=device).t()
     y_preds = []
     y_true = []
+    train_loss, valid_loss, test_loss = [], [], []
 
     model.eval()
     with torch.no_grad():
+        for nodes, labels in train_loader:
+            nodes = nodes.to(device)
+            labels = labels.to(device)
+            y_hat = model(nodes, train_edge_index)
+            loss = model.loss(y_hat, labels).cpu().item()
+            train_loss.append(loss)
+
+        for nodes, labels in valid_loader:
+            nodes = nodes.to(device)
+            labels = labels.to(device)
+            y_hat = model(nodes, valid_edge_index)
+            loss = model.loss(y_hat, labels).cpu().item()
+            valid_loss.append(loss)
+
         for nodes, labels in test_loader:
             nodes = nodes.to(device)
             labels = labels.to(device)
-
             y_hat = model(nodes, edge_index)
+            loss = model.loss(y_hat, labels).cpu().item()
+            test_loss.append(loss)
             y_pred = torch.argmax(y_hat, dim=1)
-
+            # print('y_pred', y_pred)
             y_preds.extend(y_pred.cpu().tolist())
             y_true.extend(labels.cpu().tolist())
 
-    results = classification_report(y_true, y_preds, digits=4)
-    print('  Result:')
-    print(results)
+    # print('  ', np.unique(y_preds, return_counts=True))
+    results = classification_report(y_true, y_preds, digits=4, output_dict=True)
+    return {
+        'train_loss': np.mean(train_loss),
+        'valid_loss': np.mean(valid_loss),
+        'test_loss': np.mean(test_loss),
+        'accuracy': results['accuracy'],
+        'percision': results['macro avg']['precision'],
+        'recall': results['macro avg']['recall'],
+        'f1': results['macro avg']['f1-score'],
+        'predictions': y_preds,
+    }
 
 
-def test(model, test_loader, edge_index, device):
-    y_preds = []
-    y_trues = []
-    test_loss = []
-    model.eval()
-    with torch.no_grad():
-        for nodes, labels in test_loader:
-            nodes, labels = nodes.to(device), labels.to(device)
-            y_hat = model(nodes, edge_index)
-            test_loss.append(model.loss(y_hat, labels).cpu().item())
-            y_pred = torch.argmax(y_hat, dim=1)
-            y_preds.extend(y_pred.cpu().tolist())
-            y_trues.extend(labels.cpu().tolist())
-    # del model
-    # torch.cuda.empty_cache()
-    res = classification_report(y_trues, y_preds, digits=4, output_dict=True)
-    return res, np.mean(test_loss)
+# def test(args, model, test_loader, edge_index, device):
+    # y_preds = []
+    # y_trues = []
+    # test_loss = []
+    # model.eval()
+    # with torch.no_grad():
+    #     for nodes, labels in test_loader:
+    #         nodes, labels = nodes.to(device), labels.to(device)
+    #         y_hat = model(nodes, edge_index)
+    #         if args.log:
+    #             loss = model.log_ce_loss(y_hat, labels).cpu().item()
+    #         elif args.hinge:
+    #             loss = model.hinge_loss(y_hat, labels).cpu().item()
+    #         else:
+    #             loss = model.loss(y_hat, labels).cpu().item()
+    #         test_loss.append(loss)
+    #         y_pred = torch.argmax(y_hat, dim=1)
+    #         y_preds.extend(y_pred.cpu().tolist())
+    #         y_trues.extend(labels.cpu().tolist())
+
+    # res = classification_report(y_trues, y_preds, digits=4, output_dict=True)
+    # return res, np.mean(test_loss)
 
 
 def train_model(args, data, eval=True, verbose=True, device=torch.device('cpu'), return_epoch=False):
@@ -132,14 +195,10 @@ def train_model(args, data, eval=True, verbose=True, device=torch.device('cpu'),
         print(f'Start to train a {args.model} model...')
 
     model = create_model(args, data).to(device)
-    num_epochs = train(args, data, model, device, verbose)
-    model.load_state_dict(torch.load(os.path.join('./checkpoint', 'tmp',
-                          f'{args.model}_{args.data}_{args.gpu}_best.pt')))
-
+    model_state, num_epochs = train(args, data, model, device, verbose)
+    model.load_state_dict(model_state)
     if eval:
         evaluate(args, data, model, device)
-
-    os.remove(os.path.join('./checkpoint', 'tmp', f'{args.model}_{args.data}_{args.gpu}_best.pt'))
 
     if verbose:
         print(f'{args.model} model training finished. Duration:', int(time.time() - t0))

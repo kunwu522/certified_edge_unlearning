@@ -8,9 +8,19 @@ This is an implementation of paper [Certified Edge Unlearning for Graph Neural N
 * [DeepRobust](https://deeprobust.readthedocs.io/en/latest/)
 * [StellarGraph](https://github.com/stellargraph/stellargraph)
 
-## Training
-...
-
+## Result Reproduction
+### Tightness of Bounds
+```
+python experiment.py -rq bound
+```
+### Accuracy of CEU
+```
+python experiment.py -rq unlearn
+```
+### Efficency of CEU
+```
+python experiment.py -rq efficiency
+```
 ## Unlearning
 ...
 
