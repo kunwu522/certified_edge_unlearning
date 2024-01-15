@@ -40,6 +40,6 @@ python experiment.py --rq cgu_compare
 ### Common Parameters
 * -g, the ID of a GPU you want to use. Default: -1 (using CPU)
 * -edges, a list, indicates the numbers of edges you want to unlearn. Default: \[100, 200, 400, 800, 1000\].
-* -targets, a list, indicates what target models you want to evaluate. Default:\['gcn', 'gat', 'sage', 'gin'\].
-* -datasets, a list, indicate what datasets you want to use. Default:\['cora', 'citeseer', 'cs', 'physics\].
+* -targets, a list, indicates what target models you want to evaluate. Default:\['gcn', 'sage', 'gin'\].
+* -datasets, a list, indicate what datasets you want to use. Default:\['cora', 'citeseer', 'cs'\].
 
