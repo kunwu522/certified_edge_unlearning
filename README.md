@@ -21,10 +21,21 @@ python experiment.py -rq unlearn
 ```
 python experiment.py -rq efficiency
 ```
-## Unlearning
-...
+### Efficacy of CEU
+```
+python experiment.py -rq efficacy
+```
 
-## Experiments
+### Effect of $\epsilon$
+```
+python experiment.py --rq epsilon
+```
+
+### CGU Comparison
+```
+python experiment.py --rq cgu_compare
+```
+
 
 ### Common Parameters
 * -g, the ID of a GPU you want to use. Default: -1 (using CPU)
@@ -32,13 +43,3 @@ python experiment.py -rq efficiency
 * -targets, a list, indicates what target models you want to evaluate. Default:\['gcn', 'gat', 'sage', 'gin'\].
 * -datasets, a list, indicate what datasets you want to use. Default:\['cora', 'citeseer', 'cs', 'physics\].
 
-### RQ3: Adversarial Setting
-We evaluate the fidelity and efficacy under adversarial setting.
-For fidelity, running
-```
-python experiment.py -rq rq3_fidelity
-```
-For efficacy, running
-```
-python experiment.py -rq rq3_efficacy
-```
